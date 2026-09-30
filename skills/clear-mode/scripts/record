@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""Append ClearStack run records to a local JSONL log.
+
+The log is private to this machine. Commits link back to a run through a
+`Clear-Run: <id>` trailer, and clear-stats joins the two later.
+"""
+
+import argparse
+import json
+import os
+import secrets
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def log_path():
+    base = os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state"
+    return Path(base) / "clearstack" / "runs.jsonl"
+
+
+def git(*args):
+    try:
+        out = subprocess.run(["git", *args], capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return out.stdout.strip() or None
+
+
+def git_state():
+    return {
+        "cwd": os.getcwd(),
+        "remote": git("remote", "get-url", "origin"),
+        "branch": git("branch", "--show-current"),
+        "head": git("rev-parse", "HEAD"),
+    }
+
+
+def append(record):
+    path = log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stamped = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), **record}
+    with path.open("a") as f:
+        f.write(json.dumps(stamped) + "\n")
+
+
+def require_run(run_id):
+    path = log_path()
+    if path.exists():
+        with path.open() as f:
+            for line in f:
+                entry = json.loads(line)
+                if entry["event"] == "start" and entry["run"] == run_id:
+                    return
+    sys.exit(f"record: no run {run_id!r} in {path}")
+
+
+def start(args):
+    run_id = f"cr-{datetime.now(timezone.utc):%Y%m%d}-{secrets.token_hex(3)}"
+    append({
+        "event": "start",
+        "run": run_id,
+        "task": args.task,
+        "playbook": args.playbook,
+        "agent": os.environ.get("AI_AGENT") or ("codex" if os.environ.get("CODEX_THREAD_ID") else None),
+        "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID"),
+        **git_state(),
+    })
+    print(run_id)
+
+
+def note(args):
+    require_run(args.run)
+    append({"event": "note", "run": args.run, "text": args.text})
+
+
+def end(args):
+    require_run(args.run)
+    if args.status == "parked" and not args.needs:
+        sys.exit("record: a parked run names the decision it needs (--needs)")
+    append({
+        "event": "end",
+        "run": args.run,
+        "status": args.status,
+        "verified": args.verified,
+        "unverified": args.unverified,
+        "needs": args.needs,
+        "pr": args.pr,
+        **git_state(),
+    })
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="record", description=__doc__.splitlines()[0])
+    sub = parser.add_subparsers(required=True)
+
+    p = sub.add_parser("start", help="open a run and print its id")
+    p.add_argument("--task", required=True, help="the task in one line")
+    p.add_argument("--playbook", default="none")
+    p.set_defaults(func=start)
+
+    p = sub.add_parser("note", help="add a decision to the run's trail")
+    p.add_argument("run")
+    p.add_argument("text", help="decision, alternatives considered, and why")
+    p.set_defaults(func=note)
+
+    p = sub.add_parser("end", help="close a run with its claims")
+    p.add_argument("run")
+    p.add_argument("--status", required=True, choices=["done", "parked", "abandoned"])
+    p.add_argument("--verified", action="append", default=[], metavar="CLAIM: EVIDENCE")
+    p.add_argument("--unverified", action="append", default=[], metavar="CLAIM")
+    p.add_argument("--needs", help="the one decision a parked run needs")
+    p.add_argument("--pr", help="PR URL or number")
+    p.set_defaults(func=end)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
