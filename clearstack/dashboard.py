@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import time
 from urllib.parse import parse_qs, urlsplit
 
 
@@ -121,7 +122,7 @@ def _detail(run):
     note_html = "".join(f"<li>{escape(str(note))}</li>" for note in notes)
     if not note_html:
         note_html = "<li class=muted>No decision notes recorded.</li>"
-    return f"""<section class=detail id=detail>
+    return f"""<section class="detail glass" id=detail>
       <div class=detail-head><div><p class=eyebrow>RUN DETAIL</p><h2>{escape(run['id'])}</h2></div>
       <a class=back href="/">All runs</a></div>
       <p class=task>{escape(str(start.get('task') or 'Untitled run'))}</p>
@@ -192,32 +193,86 @@ def render_page(runs, selected_id=None, error=None, bind_host="127.0.0.1"):
 <html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>ClearStack runs</title>
 <style>
-:root{{--paper:#f4f2ed;--ink:#26232a;--muted:#716d73;--line:#d8d3cf;--pink:#c43f72;--pink-soft:#f4e5eb;--green:#315d4a;--amber:#8b5e1a}}
-*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}}
-main{{max-width:1100px;margin:0 auto;padding:44px 28px 72px}}header{{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;border-bottom:2px solid var(--ink);padding-bottom:20px}}
-h1{{font-size:clamp(32px,5vw,52px);line-height:1;margin:0;letter-spacing:-.045em}}.brand{{color:var(--pink);font-size:13px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin:0 0 10px}}
-.local{{font:12px ui-monospace,monospace;color:var(--muted);border:1px solid var(--line);padding:6px 9px;white-space:nowrap}}
-.summary{{display:flex;gap:38px;padding:20px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}}.metric{{display:flex;align-items:baseline;gap:9px}}.metric strong{{font:600 23px ui-monospace,monospace}}.metric span{{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}}
-.telemetry{{margin:24px 0 34px;padding:12px 15px;border-left:3px solid var(--pink);background:var(--pink-soft);font-size:13px}}.telemetry strong{{font-weight:650}}
-.section-title{{display:flex;justify-content:space-between;align-items:baseline;margin:0 0 10px}}h2{{font-size:20px;margin:0;letter-spacing:-.02em}}.count{{font:12px ui-monospace,monospace;color:var(--muted)}}
-table{{width:100%;border-collapse:collapse;text-align:left}}th{{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:600;padding:10px 12px;border-bottom:1px solid var(--ink)}}td{{padding:13px 12px;border-bottom:1px solid var(--line);vertical-align:top}}th:first-child,td:first-child{{padding-left:0}}th:last-child,td:last-child{{padding-right:0}}tbody tr:hover{{background:#ece9e4}}
-.run-link{{color:var(--ink);text-decoration:none;font-weight:600}}.run-link:hover{{color:var(--pink)}}small{{display:block;font:11px ui-monospace,monospace;color:var(--muted);font-weight:400;margin-top:2px}}
-td:nth-child(2),td:nth-child(3),td:nth-child(4){{font-size:13px;color:var(--muted)}}.status{{font-size:12px;text-transform:capitalize}}.status.done{{color:var(--green)}}.status.parked{{color:var(--amber)}}.status.open{{color:var(--pink)}}
-.detail{{margin-top:44px;padding-top:22px;border-top:2px solid var(--ink)}}.detail-head{{display:flex;justify-content:space-between;align-items:flex-end}}.eyebrow{{font-size:10px;letter-spacing:.12em;color:var(--pink);font-weight:700;margin:0 0 6px}}.back{{font-size:13px;color:var(--pink)}}.task{{font-size:18px;margin:14px 0}}
-.metadata{{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px 20px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:15px 0;margin:16px 0 24px}}dt{{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}}dd{{margin:2px 0 0;overflow-wrap:anywhere}}code{{font:12px ui-monospace,monospace}}.detail section{{margin:20px 0}}.detail h3{{font-size:14px;margin:0 0 6px}}ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}.muted,.empty{{color:var(--muted)}}.empty{{padding:25px 0}}.error{{color:#8c243d;background:#f9e5e8;padding:12px}}
-@media(max-width:700px){{main{{padding:25px 16px 48px}}header{{align-items:flex-start;flex-direction:column}}.table-wrap{{overflow-x:auto}}table{{min-width:660px}}.summary{{gap:18px}}}}
+:root{{
+  --sky-top:#eaf6ff;--sky-mid:#d3ecfb;--sky-bottom:#bfe3fb;
+  --glass:rgba(255,255,255,.58);--glass-strong:rgba(255,255,255,.78);--glass-border:rgba(255,255,255,.9);
+  --ink:#143450;--muted:#5c7b93;--line:rgba(20,52,80,.14);
+  --aqua:#1c9ad6;--aqua-deep:#0e6fa8;--mint:#2bc98f;--coral:#e8637a;--amber:#c98a1d;
+  --shadow:0 1px 1px rgba(14,70,110,.06),0 10px 28px -14px rgba(14,70,110,.35);
+}}
+*{{box-sizing:border-box}}
+body{{margin:0;min-height:100vh;color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;
+  background:
+    radial-gradient(1100px 460px at 18% -10%,rgba(255,255,255,.9),rgba(255,255,255,0) 60%),
+    linear-gradient(180deg,var(--sky-top),var(--sky-mid) 45%,var(--sky-bottom));
+  background-attachment:fixed}}
+main{{max-width:1100px;margin:0 auto;padding:44px 28px 72px}}
+.glass{{background:var(--glass);backdrop-filter:blur(14px) saturate(160%);-webkit-backdrop-filter:blur(14px) saturate(160%);
+  border:1px solid var(--glass-border);border-radius:18px;box-shadow:var(--shadow);position:relative;overflow:hidden}}
+.glass::before{{content:"";position:absolute;inset:0 0 auto 0;height:46%;
+  background:linear-gradient(180deg,rgba(255,255,255,.85),rgba(255,255,255,0));pointer-events:none}}
+header.glass{{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:22px 28px;margin-bottom:26px}}
+h1{{font-size:clamp(28px,4.4vw,42px);line-height:1;margin:0;letter-spacing:-.03em;
+  background:linear-gradient(180deg,var(--aqua-deep),var(--ink));-webkit-background-clip:text;background-clip:text;color:transparent}}
+.brand{{color:var(--aqua-deep);font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;margin:0 0 8px}}
+.head-right{{display:flex;align-items:center;gap:12px}}
+.live{{display:flex;align-items:center;gap:7px;font:12px ui-monospace,monospace;color:var(--muted);
+  background:var(--glass-strong);border:1px solid var(--glass-border);border-radius:999px;padding:7px 13px 7px 11px}}
+.live-dot{{width:8px;height:8px;border-radius:50%;background:var(--mint);box-shadow:0 0 0 0 rgba(43,201,143,.6);animation:pulse 2s infinite}}
+.live.offline .live-dot{{background:var(--coral);animation:none;box-shadow:none}}
+@keyframes pulse{{0%{{box-shadow:0 0 0 0 rgba(43,201,143,.55)}}70%{{box-shadow:0 0 0 9px rgba(43,201,143,0)}}100%{{box-shadow:0 0 0 0 rgba(43,201,143,0)}}}}
+.local{{font:11px ui-monospace,monospace;color:var(--muted);border:1px solid var(--glass-border);background:var(--glass-strong);
+  border-radius:999px;padding:7px 13px;white-space:nowrap}}
+.summary.glass{{display:flex;gap:30px;padding:18px 26px;margin-bottom:20px;flex-wrap:wrap}}
+.metric{{display:flex;align-items:baseline;gap:9px}}.metric strong{{font:700 22px ui-monospace,monospace;color:var(--aqua-deep)}}
+.metric span{{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}}
+.telemetry.glass{{margin:0 0 20px;padding:14px 20px;border-left:4px solid var(--aqua);font-size:13px}}.telemetry strong{{font-weight:650}}
+.section-title{{display:flex;justify-content:space-between;align-items:baseline;margin:0 0 12px}}
+h2{{font-size:19px;margin:0;letter-spacing:-.02em;color:var(--ink)}}.count{{font:11px ui-monospace,monospace;color:var(--muted)}}
+.panel.glass{{padding:8px 10px 2px}}
+table{{width:100%;border-collapse:collapse;text-align:left}}
+th{{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:700;padding:12px 14px;border-bottom:1px solid var(--line)}}
+td{{padding:13px 14px;border-bottom:1px solid var(--line);vertical-align:top}}
+tbody tr:hover{{background:rgba(28,154,214,.08)}}
+.run-link{{color:var(--ink);text-decoration:none;font-weight:600}}.run-link:hover{{color:var(--aqua-deep)}}
+small{{display:block;font:11px ui-monospace,monospace;color:var(--muted);font-weight:400;margin-top:2px}}
+td:nth-child(2),td:nth-child(3),td:nth-child(4){{font-size:13px;color:var(--muted)}}
+.status{{font-size:11px;text-transform:capitalize;font-weight:600;padding:3px 10px;border-radius:999px}}
+.status.done{{color:#0a6b47;background:rgba(43,201,143,.18)}}
+.status.parked{{color:#8a5c0e;background:rgba(201,138,29,.18)}}
+.status.open{{color:var(--aqua-deep);background:rgba(28,154,214,.16)}}
+.status.abandoned{{color:#8a2f3f;background:rgba(232,99,122,.16)}}
+.detail.glass{{margin-top:28px;padding:26px 28px}}
+.detail-head{{display:flex;justify-content:space-between;align-items:flex-end}}
+.eyebrow{{font-size:10px;letter-spacing:.12em;color:var(--aqua-deep);font-weight:700;margin:0 0 6px}}
+.back{{font-size:13px;color:var(--aqua-deep);text-decoration:none;font-weight:600}}.back:hover{{text-decoration:underline}}
+.task{{font-size:18px;margin:14px 0}}
+.metadata{{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px 20px;
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:15px 0;margin:16px 0 24px}}
+dt{{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}}dd{{margin:2px 0 0;overflow-wrap:anywhere}}
+code{{font:12px ui-monospace,monospace}}.detail section{{margin:20px 0}}.detail h3{{font-size:14px;margin:0 0 6px;color:var(--aqua-deep)}}
+ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}
+.muted,.empty{{color:var(--muted)}}.empty{{padding:25px 0}}
+.error{{color:#8c243d;background:rgba(232,99,122,.16);padding:12px;border-radius:10px}}
+.table-wrap{{padding-bottom:6px}}
+@media(max-width:700px){{main{{padding:25px 16px 48px}}header.glass{{align-items:flex-start;flex-direction:column}}
+  .table-wrap{{overflow-x:auto}}table{{min-width:660px}}.summary.glass{{gap:18px}}}}
 </style></head><body><main>
-<header><div><p class=brand>ClearStack / local run log</p><h1>Runs</h1></div><span class=local>{escape(bind_host)}</span></header>
-<div class=summary><div class=metric><strong>{len(runs)}</strong><span>runs</span></div>
+<header class=glass><div><p class=brand>ClearStack / local run log</p><h1>Runs</h1></div>
+<div class=head-right><span class=live id=live><span class=live-dot></span><span id=live-label>live</span></span>
+<span class=local>{escape(bind_host)}</span></div></header>
+<div class="summary glass"><div class=metric><strong>{len(runs)}</strong><span>runs</span></div>
 <div class=metric><strong>{counts['open']}</strong><span>open</span></div><div class=metric><strong>{counts['done']}</strong><span>done</span></div>
 <div class=metric><strong>{counts['parked']}</strong><span>parked</span></div>
 {f'<div class=metric><strong>${total_cost:.2f}</strong><span>total cost</span></div>' if has_telemetry else ''}</div>
-{"" if has_telemetry else '<div class=telemetry><strong>Token and tool telemetry is not collected yet.</strong> No run in this log has it. Open a run detail to check once one does. Totals are not shown as zero.</div>'}
-{error_html}<section><div class=section-title><h2>Recent runs</h2><span class=count>newest first</span></div>{table}</section>
+{"" if has_telemetry else '<div class="telemetry glass"><strong>Token and tool telemetry is not collected yet.</strong> No run in this log has it. Open a run detail to check once one does. Totals are not shown as zero.</div>'}
+{error_html}<section class="panel glass"><div class=section-title><h2>Recent runs</h2><span class=count>newest first</span></div>{table}</section>
 {detail_html}{missing}</main>
 <script>
 (function(){{
-  var poll = function(){{
+  var liveEl = document.getElementById("live");
+  var liveLabel = document.getElementById("live-label");
+  var refresh = function(){{
     fetch(location.href, {{cache: "no-store"}}).then(function(r){{ return r.text(); }}).then(function(html){{
       var next = new DOMParser().parseFromString(html, "text/html");
       var nextMain = next.querySelector("main");
@@ -227,10 +282,26 @@ td:nth-child(2),td:nth-child(3),td:nth-child(4){{font-size:13px;color:var(--mute
       }}
     }}).catch(function(){{}});
   }};
-  setInterval(poll, 4000);
+  if (typeof EventSource === "undefined") {{
+    liveLabel.textContent = "polling";
+    setInterval(refresh, 4000);
+    return;
+  }}
+  var es = new EventSource("/events");
+  es.addEventListener("update", refresh);
+  es.onopen = function(){{ liveEl.classList.remove("offline"); liveLabel.textContent = "live"; }};
+  es.onerror = function(){{ liveEl.classList.add("offline"); liveLabel.textContent = "reconnecting"; }};
 }})();
 </script>
 </body></html>"""
+
+
+def _log_mtime():
+    """Return the run log's mtime, or 0.0 when it does not exist yet."""
+    try:
+        return default_log_path().stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -238,6 +309,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         request = urlsplit(self.path)
+        if request.path == "/events":
+            self._serve_events()
+            return
         if request.path != "/":
             self.send_error(404)
             return
@@ -258,6 +332,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(body)
+
+    def _serve_events(self):
+        """Server-Sent Events: push 'update' whenever the run log's mtime changes."""
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'none'")
+            self.end_headers()
+            last_mtime = _log_mtime()
+            last_ping = time.monotonic()
+            while True:
+                time.sleep(0.5)
+                mtime = _log_mtime()
+                if mtime != last_mtime:
+                    last_mtime = mtime
+                    self.wfile.write(b"event: update\ndata: {}\n\n")
+                    self.wfile.flush()
+                elif time.monotonic() - last_ping > 20:
+                    last_ping = time.monotonic()
+                    self.wfile.write(b": keep-alive\n\n")
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return
 
     def log_message(self, format, *args):
         # Do not log local task text or query values to the terminal.

@@ -1,10 +1,14 @@
 import json
 import tempfile
+import threading
+import time
 import unittest
+import urllib.request
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from clearstack.dashboard import default_log_path, load_runs, render_page
+from clearstack.dashboard import DashboardHandler, default_log_path, load_runs, render_page
 
 
 class DashboardTest(unittest.TestCase):
@@ -80,10 +84,38 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("7", detail)
 
 
-    def test_page_includes_a_polling_script_for_realtime_updates(self):
+    def test_page_includes_an_eventsource_script_for_realtime_updates(self):
         page = render_page(load_runs(self.log))
-        self.assertIn("setInterval(poll", page)
+        self.assertIn("new EventSource(\"/events\")", page)
         self.assertIn("</script>", page)
+
+
+class SSETest(unittest.TestCase):
+    def test_events_endpoint_pushes_update_when_the_log_file_changes(self):
+        state = tempfile.TemporaryDirectory()
+        self.addCleanup(state.cleanup)
+        log_path = Path(state.name) / "clearstack" / "runs.jsonl"
+        log_path.parent.mkdir(parents=True)
+        log_path.write_text("")
+
+        with patch.dict("os.environ", {"XDG_STATE_HOME": state.name}):
+            server = ThreadingHTTPServer(("127.0.0.1", 0), DashboardHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(thread.join, timeout=2)
+            try:
+                conn = urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/events", timeout=5)
+                self.addCleanup(conn.close)
+                time.sleep(0.1)
+                log_path.write_text('{"event":"start","run":"r1"}\n')
+                deadline = time.monotonic() + 5
+                chunk = b""
+                while time.monotonic() < deadline and b"event: update" not in chunk:
+                    chunk += conn.read1(256)
+                self.assertIn(b"event: update", chunk)
+            finally:
+                server.server_close()
 
 if __name__ == "__main__":
     unittest.main()
