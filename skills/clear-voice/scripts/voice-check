@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Flag clear-voice rule breaks that a script can see.
+
+Reads FILE arguments, or stdin when there are none. Prints one line per hit
+as `file:line: rule N: message` and exits 1 if anything was flagged. Text
+inside fenced code blocks and inline backticks is skipped, since code and
+quoted output are not prose.
+"""
+
+import re
+import sys
+
+# (rule id, pattern, message). Patterns match whole words, case-insensitive.
+CHECKS = [
+    (5, r"\b(leverag\w*|utiliz\w*|facilitat\w*)\b", "use a plain word: use, help"),
+    (5, r"\b(serves as|stands as|boasts)\b", "say 'is' or 'has'"),
+    (5, r"\b(in order to|due to the fact that|it is important to note that)\b", "filler: cut or shorten"),
+    (6, r"\b(delve\w*|crucial|pivotal|robust|seamless\w*|comprehensive|landscape|tapestry|testament|underscor\w*|showcas\w*|foster\w*|enhanc\w*|intricate|vibrant|additionally)\b", "stock AI vocabulary"),
+    (8, r"\b(substrate|north star|flywheel|endgame|paradigm)\b", "metaphor noun: use the concrete word"),
+    (13, r"\b(could potentially|might possibly|may potentially)\b", "stacked hedge: hedge once"),
+    (14, r"\bnot (just|only|merely) [^.]{1,60}?,? but\b", "'not just X, but Y': state the point"),
+    (15, r"\u2014", "em dash: use a period or comma"),
+    (18, r"[\u201c\u201d\u2018\u2019]", "curly quote: use straight quotes"),
+    (20, r"\b(great question|certainly!|i hope this helps|let me know if|happy to help|absolutely right)\b", "chatbot phrase"),
+]
+COMPILED = [(rule, re.compile(p, re.IGNORECASE), msg) for rule, p, msg in CHECKS]
+INLINE_CODE = re.compile(r"`[^`]*`")
+
+
+def check(name, text):
+    hits = []
+    in_fence = False
+    for number, line in enumerate(text.splitlines(), 1):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        prose = INLINE_CODE.sub("", line)
+        for rule, pattern, msg in COMPILED:
+            for match in pattern.finditer(prose):
+                hits.append(f"{name}:{number}: rule {rule}: {msg} ({match.group(0)!r})")
+    return hits
+
+
+def main(paths):
+    sources = [(p, open(p, encoding="utf-8").read()) for p in paths] or [("<stdin>", sys.stdin.read())]
+    hits = [hit for name, text in sources for hit in check(name, text)]
+    for hit in hits:
+        print(hit)
+    return 1 if hits else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

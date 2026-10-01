@@ -24,7 +24,7 @@ The repo's `AGENTS.md` or `CLAUDE.md` and the operator's instructions win wherev
 2. **Pick principles.** Read the index below and open each principle file that applies to this task before you act on it. Done when every principle you rely on has been read this session.
 3. **Work to done autonomously.** See **Autonomy**. Add `--trailer "Clear-Run: <id>"` to every commit the run makes. Log each non-obvious decision with `scripts/record note <id> "<decision, alternatives, why>"`.
 4. **Close the run record.** Run `scripts/record end <id> --status done|parked|abandoned`, with one `--verified "<claim>: <evidence>"` per proven claim, one `--unverified "<claim>"` per claim you could not prove, `--needs "<decision>"` when parked, and `--pr` when there is one. Done when every claim your reply will make appears in the record as verified or unverified.
-5. **Reply.** Report each state separately (see **separate-the-states**), put evidence beside each claim, and name each principle that changed a decision and the decision it changed.
+5. **Reply.** Report each state separately (see **separate-the-states**), put evidence beside each claim, and name each principle that changed a decision and the decision it changed. Write the reply, commit messages, PR bodies, and record notes in the `clear-voice` style.
 
 ## Autonomy
 

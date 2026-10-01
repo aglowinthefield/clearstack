@@ -33,7 +33,7 @@ npx skills add aglowinthefield/clearstack -g
 To have agents apply it without being asked, add this line to a repo's `AGENTS.md` or `CLAUDE.md`, or to your global one:
 
 ```markdown
-Apply the `clear-mode` skill to every non-trivial engineering task. Repo instructions still win where they are stricter.
+Apply the `clear-mode` skill to every non-trivial engineering task, and write all output in the `clear-voice` style. Repo instructions still win where they are stricter.
 ```
 
 ## How it works
@@ -55,6 +55,18 @@ The agent stops and hands back only when:
 - the work is done and proven.
 
 When it stops early, it leaves the work committed with a handoff note and names the single decision it needs. Your repo's own rules win wherever they are stricter than ClearStack's.
+
+## Clear voice
+
+`clear-voice` is the output style for everything an agent writes: replies, commit messages, PR bodies, handoff notes, and run-record entries. It leads with the answer, keeps length matched to the ask, and drops stock AI vocabulary, filler, chatbot phrases, and em dashes. It governs content and density, so an operator-chosen persona still works.
+
+The rules are numbered in [`skills/clear-voice/SKILL.md`](skills/clear-voice/SKILL.md). `scripts/voice-check` flags the ones a script can see, with file, line, and rule id:
+
+```bash
+skills/clear-voice/scripts/voice-check PR_BODY.md
+```
+
+The test suite runs it over every Markdown file in this repo.
 
 ## Principles
 
@@ -86,10 +98,12 @@ Commits made during a run carry a `Clear-Run: <id>` trailer, which links GitHub 
 
 | | Piece | State |
 |---|---|---|
-| 1 | `clear-mode`, principles, `scripts/record` | in review |
+| 1 | `clear-mode`, principles, `scripts/record` | merged |
+| 1b | `clear-voice` output style and `voice-check` | in review |
 | 2 | Playbooks: investigate, bug-fix, feature, review, ship, pickup/handoff | planned |
 | 3 | `clear-stats`: outcomes, claim vs proof, rework, corrections, and cost across Claude Code, Codex, Hermes, and GitHub | planned |
 | 4 | `clear-reflect`: mine transcripts for repeated corrections and repeated tool-call chains, and propose principles, guards, or scripts | planned |
+| 5 | Local dashboard: every run with its tokens, tool calls, duration, decisions, claims, and outcome, read from the run log and harness transcripts on this machine. No network calls. | planned |
 
 ## Develop
 
