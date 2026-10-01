@@ -1,12 +1,14 @@
 """Read-only local dashboard for ClearStack run records."""
 
 import argparse
+from contextlib import closing
 from datetime import datetime, timezone
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import sqlite3
 from urllib.parse import parse_qs, urlsplit
 
 
@@ -15,7 +17,47 @@ def default_log_path():
     return Path(state_home) / "clearstack" / "runs.jsonl"
 
 
-def load_runs(path=None):
+def default_hermes_db_path():
+    """Resolve Hermes' active-profile database without importing Hermes internals."""
+    return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes") / "state.db"
+
+
+def _session_telemetry(db_path, session_ids):
+    """Read only aggregate counters for explicitly linked Hermes sessions."""
+    result = {}
+    ids = {session_id for session_id in session_ids if isinstance(session_id, str) and session_id}
+    if not ids:
+        return result
+    path = Path(db_path)
+    if not path.is_file():
+        return result
+    uri = f"{path.resolve().as_uri()}?mode=ro"
+    columns = (
+        "tool_call_count", "input_tokens", "output_tokens", "api_call_count",
+        "estimated_cost_usd", "actual_cost_usd", "cost_status",
+    )
+    try:
+        with closing(sqlite3.connect(uri, uri=True, timeout=1)) as db:
+            db.row_factory = sqlite3.Row
+            available = {row[1] for row in db.execute("PRAGMA table_info(sessions)")}
+            if "id" not in available:
+                return result
+            projection = ", ".join(
+                f"{column} AS {column}" if column in available else f"NULL AS {column}"
+                for column in columns
+            )
+            for session_id in ids:
+                row = db.execute(
+                    f"SELECT {projection} FROM sessions WHERE id = ?", (session_id,)
+                ).fetchone()
+                if row is not None:
+                    result[session_id] = {"available": True, **dict(row)}
+    except sqlite3.Error:
+        return result
+    return result
+
+
+def load_runs(path=None, telemetry_path=None):
     """Read event records and group them into newest-first runs."""
     log_path = Path(path) if path is not None else default_log_path()
     if not log_path.exists():
@@ -41,6 +83,10 @@ def load_runs(path=None):
         ends = [event for event in events if event.get("event") == "end"]
         start = starts[0] if starts else {}
         end = ends[-1] if ends else None
+        linked_sessions = [event.get("session") for event in events if event.get("event") == "link"]
+        session_id = linked_sessions[-1] if linked_sessions else (
+            start.get("session") if start.get("agent") == "hermes-agent" else None
+        )
         runs.append({
             "id": run_id,
             "start": start,
@@ -48,8 +94,23 @@ def load_runs(path=None):
             "events": events,
             "started_at": start.get("ts", ""),
             "status": end.get("status", "open") if end else "open",
+            "session_id": session_id,
         })
-    return sorted(runs, key=lambda run: (run["started_at"], run["id"]), reverse=True)
+    runs = sorted(runs, key=lambda run: (run["started_at"], run["id"]), reverse=True)
+    if telemetry_path is None and path is None:
+        telemetry_path = default_hermes_db_path()
+    if telemetry_path is not None:
+        by_session = _session_telemetry(telemetry_path, [run["session_id"] for run in runs])
+        for run in runs:
+            session_id = run["session_id"]
+            run["telemetry"] = by_session.get(
+                session_id,
+                {"available": False, "reason": "no linked Hermes session" if not session_id else "linked session unavailable"},
+            )
+    else:
+        for run in runs:
+            run["telemetry"] = {"available": False, "reason": "no linked Hermes session"}
+    return runs
 
 
 def _parse_time(value):
@@ -93,6 +154,77 @@ def _claims(title, claims):
     return f"<section><h3>{escape(title)}</h3><ul>{items}</ul></section>"
 
 
+def _number(value):
+    return f"{int(value):,}" if value is not None else "Unavailable"
+
+
+def _telemetry_detail(telemetry):
+    if not telemetry.get("available"):
+        return ("<section><h3>Observed usage</h3><p class=muted>"
+                f"{escape(telemetry.get('reason', 'Telemetry unavailable'))}. Counters are not inferred.</p></section>")
+    total_tokens = None
+    if telemetry.get("input_tokens") is not None and telemetry.get("output_tokens") is not None:
+        total_tokens = telemetry["input_tokens"] + telemetry["output_tokens"]
+    cost = telemetry.get("actual_cost_usd")
+    cost_label = "Actual cost"
+    if cost is None:
+        cost = telemetry.get("estimated_cost_usd")
+        cost_label = "Estimated cost" if cost is not None else "Cost"
+    cost_value = f"${cost:.4f}" if cost is not None else "Unavailable"
+    return f"""<section><h3>Observed usage</h3>
+      <p class=muted>Hermes session totals, which may span multiple ClearStack runs. Not a quality score.</p>
+      <dl class=usage>
+        <div><dt>Total tokens</dt><dd>{_number(total_tokens)}</dd></div>
+        <div><dt>Input tokens</dt><dd>{_number(telemetry.get('input_tokens'))}</dd></div>
+        <div><dt>Output tokens</dt><dd>{_number(telemetry.get('output_tokens'))}</dd></div>
+        <div><dt>Tool calls</dt><dd>{_number(telemetry.get('tool_call_count'))}</dd></div>
+        <div><dt>API calls</dt><dd>{_number(telemetry.get('api_call_count'))}</dd></div>
+        <div><dt>{cost_label}</dt><dd>{cost_value}</dd></div>
+      </dl>
+    </section>"""
+
+
+def _usage_chart(runs):
+    rows = [run for run in runs if run.get("telemetry", {}).get("available")]
+    unique_rows = []
+    seen_sessions = set()
+    for run in rows:
+        session_id = run.get("session_id")
+        if session_id and session_id not in seen_sessions:
+            seen_sessions.add(session_id)
+            unique_rows.append(run)
+    rows = unique_rows[:8]
+    if not rows:
+        return ""
+
+    def chart(title, measure):
+        points = []
+        for run in rows:
+            telemetry = run["telemetry"]
+            if measure == "tokens":
+                value = (telemetry["input_tokens"] + telemetry["output_tokens"]
+                         if telemetry.get("input_tokens") is not None and telemetry.get("output_tokens") is not None
+                         else None)
+            else:
+                value = telemetry.get("tool_call_count")
+            if value is not None:
+                points.append((run, value))
+        if not points:
+            return ""
+        maximum = max(value for _, value in points) or 1
+        bars = []
+        for run, value in points:
+            width = max(1, round(value * 100 / maximum))
+            bars.append(f"""<div class=usage-row><span>{escape(str(run['start'].get('task') or run['id']))}</span>
+              <div class=bar-track><div class=bar style="width:{width}%"></div></div>
+              <strong>{_number(value)}</strong></div>""")
+        return f"<div class=usage-measure><h3>{title}</h3>{''.join(bars)}</div>"
+
+    return ("<section class=usage-chart><h2>Hermes session usage</h2>"
+            "<p class=muted>Each session appears once. Totals may span multiple ClearStack runs.</p>"
+            + chart("Tokens (input + output)", "tokens") + chart("Tool calls", "tools") + "</section>")
+
+
 def _detail(run):
     start = run["start"]
     end = run["end"] or {}
@@ -115,6 +247,7 @@ def _detail(run):
       <section><h3>Decision notes</h3><ul>{note_html}</ul></section>
       {_claims('Verified', end.get('verified', []))}
       {_claims('Unverified', end.get('unverified', []))}
+      {_telemetry_detail(run.get('telemetry', {"available": False, "reason": "no linked Hermes session"}))}
       {f"<section><h3>Needs</h3><p>{escape(str(end['needs']))}</p></section>" if end.get('needs') else ''}
       {f"<section><h3>Pull request</h3><p>{escape(str(end['pr']))}</p></section>" if end.get('pr') else ''}
     </section>"""
@@ -145,6 +278,14 @@ def render_page(runs, selected_id=None, error=None):
     error_html = f"<p class=error>{escape(error)}</p>" if error else ""
     detail_html = _detail(selected) if selected else ""
     missing = f"<p class=empty>Run '{escape(selected_id)}' was not found.</p>" if selected_id and not selected else ""
+    measured = [run["telemetry"] for run in runs if run.get("telemetry", {}).get("available")]
+    telemetry_html = (
+        f"<div class=telemetry><strong>Observed telemetry: {len({run.get('session_id') for run in runs if run.get('telemetry', {}).get('available')})} linked Hermes session(s).</strong> "
+        "Hermes session counters are shown only when a run has an explicit session ID. These are measurements, not quality scores.</div>"
+        if measured else
+        "<div class=telemetry><strong>Token and tool telemetry is not collected yet.</strong> "
+        "Link a Hermes session to a run to show its local aggregate counters. Missing telemetry is not shown as zero.</div>"
+    )
     return f"""<!doctype html>
 <html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>ClearStack runs</title>
@@ -162,14 +303,14 @@ table{{width:100%;border-collapse:collapse;text-align:left}}th{{font-size:11px;c
 td:nth-child(2),td:nth-child(3),td:nth-child(4){{font-size:13px;color:var(--muted)}}.status{{font-size:12px;text-transform:capitalize}}.status.done{{color:var(--green)}}.status.parked{{color:var(--amber)}}.status.open{{color:var(--pink)}}
 .detail{{margin-top:44px;padding-top:22px;border-top:2px solid var(--ink)}}.detail-head{{display:flex;justify-content:space-between;align-items:flex-end}}.eyebrow{{font-size:10px;letter-spacing:.12em;color:var(--pink);font-weight:700;margin:0 0 6px}}.back{{font-size:13px;color:var(--pink)}}.task{{font-size:18px;margin:14px 0}}
 .metadata{{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px 20px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:15px 0;margin:16px 0 24px}}dt{{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}}dd{{margin:2px 0 0;overflow-wrap:anywhere}}code{{font:12px ui-monospace,monospace}}.detail section{{margin:20px 0}}.detail h3{{font-size:14px;margin:0 0 6px}}ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}.muted,.empty{{color:var(--muted)}}.empty{{padding:25px 0}}.error{{color:#8c243d;background:#f9e5e8;padding:12px}}
+.usage{{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin:12px 0}}.usage dd{{font:600 17px ui-monospace,monospace}}.usage-chart{{margin:28px 0 34px}}.usage-chart h2{{margin-bottom:0}}.usage-row{{display:grid;grid-template-columns:minmax(100px,1fr) minmax(80px,2fr) 70px;align-items:center;gap:12px;padding:7px 0;border-bottom:1px solid var(--line);font-size:12px}}.usage-row>span{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.usage-row strong{{font:12px ui-monospace,monospace;text-align:right}}.bar-track{{height:8px;background:#e1dcd7}}.bar{{height:100%;background:var(--pink)}}
 @media(max-width:700px){{main{{padding:25px 16px 48px}}header{{align-items:flex-start;flex-direction:column}}.table-wrap{{overflow-x:auto}}table{{min-width:660px}}.summary{{gap:18px}}}}
 </style></head><body><main>
 <header><div><p class=brand>ClearStack / local run log</p><h1>Runs</h1></div><span class=local>LOCAL ONLY · 127.0.0.1</span></header>
 <div class=summary><div class=metric><strong>{len(runs)}</strong><span>runs</span></div>
 <div class=metric><strong>{counts['open']}</strong><span>open</span></div><div class=metric><strong>{counts['done']}</strong><span>done</span></div>
 <div class=metric><strong>{counts['parked']}</strong><span>parked</span></div></div>
-<div class=telemetry><strong>Token and tool telemetry is not collected yet.</strong> The current run log has decisions and claims, but no usage or tool-call events. Totals are not shown as zero.</div>
-{error_html}<section><div class=section-title><h2>Recent runs</h2><span class=count>newest first</span></div>{table}</section>
+{telemetry_html}{error_html}{_usage_chart(runs)}<section><div class=section-title><h2>Recent runs</h2><span class=count>newest first</span></div>{table}</section>
 {detail_html}{missing}</main></body></html>"""
 
 

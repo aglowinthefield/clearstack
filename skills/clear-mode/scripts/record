@@ -63,8 +63,11 @@ def start(args):
         "run": run_id,
         "task": args.task,
         "playbook": args.playbook,
-        "agent": os.environ.get("AI_AGENT") or ("codex" if os.environ.get("CODEX_THREAD_ID") else None),
-        "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID"),
+        "agent": os.environ.get("AI_AGENT") or (
+            "hermes-agent" if os.environ.get("HERMES_SESSION_ID") else
+            "codex" if os.environ.get("CODEX_THREAD_ID") else None
+        ),
+        "session": os.environ.get("HERMES_SESSION_ID") or os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID"),
         **git_state(),
     })
     print(run_id)
@@ -73,6 +76,11 @@ def start(args):
 def note(args):
     require_run(args.run)
     append({"event": "note", "run": args.run, "text": args.text})
+
+
+def link(args):
+    require_run(args.run)
+    append({"event": "link", "run": args.run, "session": args.session})
 
 
 def end(args):
@@ -104,6 +112,11 @@ def main():
     p.add_argument("run")
     p.add_argument("text", help="decision, alternatives considered, and why")
     p.set_defaults(func=note)
+
+    p = sub.add_parser("link", help="link a run to a Hermes session for local telemetry")
+    p.add_argument("run")
+    p.add_argument("session", help="Hermes session ID")
+    p.set_defaults(func=link)
 
     p = sub.add_parser("end", help="close a run with its claims")
     p.add_argument("run")

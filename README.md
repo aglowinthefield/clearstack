@@ -102,9 +102,9 @@ Start the read-only run dashboard with:
 python3 -m clearstack.dashboard
 ```
 
-It serves only on `127.0.0.1:8765` and reads `~/.local/state/clearstack/runs.jsonl` (or `$XDG_STATE_HOME/clearstack/runs.jsonl`). It makes no network requests and does not change the log. This first version shows run status, duration, decision notes, and claims. Token and tool-call telemetry is not collected by the current run log, so the dashboard labels it as unavailable rather than showing zero.
+It serves only on `127.0.0.1:8765` and reads `~/.local/state/clearstack/runs.jsonl` (or `$XDG_STATE_HOME/clearstack/runs.jsonl`). It makes no network requests and does not change either data source. For Hermes runs, `record start` captures `HERMES_SESSION_ID`; use `skills/clear-mode/scripts/record link <run-id> <session-id>` to link an existing run. The dashboard reads only matching session aggregates from `$HERMES_HOME/state.db` (or `~/.hermes/state.db`) in read-only mode. It shows token and API/tool-call counts, cost when available, and charts usage by linked Hermes session. A session may cover multiple ClearStack runs, so these totals are not attributed to one task. Missing telemetry stays unavailable. These are usage measurements, not quality or efficiency scores.
 
-The dashboard should also preserve the user's original request and pending decisions through long agent output, so the current goal does not get buried. This first version reads run records only and does not capture conversation text.
+The dashboard should also preserve the user's original request and pending decisions through long agent output, so the current goal does not get buried. It does not capture conversation text; the Hermes integration reads aggregate counters only.
 
 ## Status
 
@@ -115,7 +115,7 @@ The dashboard should also preserve the user's original request and pending decis
 | 2 | Playbooks: investigate, bug-fix, feature, review, ship, pickup/handoff | planned |
 | 3 | `clear-stats`: outcomes, claim vs proof, rework, corrections, and cost across Claude Code, Codex, Hermes, and GitHub | planned |
 | 4 | `clear-reflect`: mine transcripts for repeated corrections and repeated tool-call chains, and propose principles, guards, or scripts | planned |
-| 5 | Local dashboard: read-only view of run records | in progress; token and tool-call telemetry still needs a local source |
+| 5 | Local dashboard: read-only run records and Hermes usage aggregates | in progress; other agent sources and outcome analytics remain |
 
 ## Develop
 

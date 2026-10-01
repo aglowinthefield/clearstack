@@ -45,6 +45,16 @@ class RecordTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual([e["event"] for e in self.log()], ["start"])
 
+    def test_hermes_session_is_recorded_and_can_be_linked_later(self):
+        self.env["HERMES_SESSION_ID"] = "hermes-session"
+        run_id = self.run_record("start", "--task", "inspect usage").stdout.strip()
+        self.env.pop("HERMES_SESSION_ID")
+        self.run_record("link", run_id, "later-session")
+
+        log = self.log()
+        self.assertEqual(log[0]["session"], "hermes-session")
+        self.assertEqual(log[1], {"ts": log[1]["ts"], "event": "link", "run": run_id, "session": "later-session"})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,6 @@
 import json
+import sqlite3
+from contextlib import closing
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,6 +19,19 @@ class DashboardTest(unittest.TestCase):
 
     def write_events(self, *events):
         self.log.write_text("".join(json.dumps(event) + "\n" for event in events))
+
+    def write_hermes_db(self):
+        db_path = Path(self.temp.name) / "state.db"
+        with closing(sqlite3.connect(db_path)) as db:
+            db.execute("""CREATE TABLE sessions (
+                id TEXT PRIMARY KEY, tool_call_count INTEGER, input_tokens INTEGER,
+                output_tokens INTEGER, api_call_count INTEGER, estimated_cost_usd REAL,
+                actual_cost_usd REAL, cost_status TEXT
+            )""")
+            db.execute("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                       ("session-1", 4, 1200, 300, 6, 0.12, None, "estimated"))
+            db.commit()
+        return db_path
 
     def test_empty_xdg_state_home_uses_default_state_directory(self):
         home = Path(self.temp.name) / "home"
@@ -57,6 +72,39 @@ class DashboardTest(unittest.TestCase):
         self.assertNotIn("<script>alert(1)</script>", page)
         self.assertIn("Token and tool telemetry is not collected yet", page)
         self.assertIn("<title>ClearStack runs</title>", page)
+
+    def test_load_runs_attaches_hermes_usage_only_to_matching_session(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "tracked", "agent": "hermes-agent", "session": "session-1"},
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "unmatched", "agent": "hermes-agent"},
+        )
+
+        runs = load_runs(self.log, telemetry_path=self.write_hermes_db())
+
+        self.assertEqual(runs[1]["telemetry"], {
+            "available": True, "tool_call_count": 4, "input_tokens": 1200, "output_tokens": 300,
+            "api_call_count": 6, "estimated_cost_usd": 0.12, "actual_cost_usd": None,
+            "cost_status": "estimated",
+        })
+        self.assertEqual(runs[0]["telemetry"], {"available": False, "reason": "no linked Hermes session"})
+
+    def test_dashboard_visualizes_measured_usage_without_an_efficiency_grade(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "tracked", "agent": "hermes-agent", "session": "session-1", "task": "measured task"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "start", "run": "same-session", "agent": "hermes-agent", "session": "session-1", "task": "second task"},
+        )
+
+        page = render_page(load_runs(self.log, telemetry_path=self.write_hermes_db()), selected_id="tracked")
+
+        self.assertIn("1,500", page)
+        self.assertIn("4", page)
+        self.assertIn("6", page)
+        self.assertIn("0.12", page)
+        self.assertIn("Hermes session usage", page)
+        self.assertIn("Totals may span multiple ClearStack runs", page)
+        self.assertNotIn("efficiency score", page.lower())
+        self.assertNotIn("session-1", page)
+        self.assertEqual(page.count("class=usage-row"), 2)
 
 
 if __name__ == "__main__":
