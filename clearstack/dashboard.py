@@ -142,11 +142,30 @@ def _detail(run):
     </section>"""
 
 
+def _run_cost(run):
+    telemetry = (run["end"] or {}).get("telemetry") if run["end"] else None
+    if not telemetry:
+        return None
+    return telemetry.get("cost_usd")
+
+
+def _format_cost_cell(run):
+    telemetry = (run["end"] or {}).get("telemetry") if run["end"] else None
+    if not telemetry:
+        return "<span class=muted>—</span>"
+    cost = telemetry.get("cost_usd")
+    cost_text = f"${cost:.2f}" if isinstance(cost, (int, float)) else "—"
+    calls = telemetry.get("tool_calls")
+    calls_text = f"{calls:,} calls" if isinstance(calls, (int, float)) else ""
+    return f"{escape(cost_text)}<small>{escape(calls_text)}</small>" if calls_text else escape(cost_text)
+
+
 def render_page(runs, selected_id=None, error=None):
     """Render one self-contained HTML page. All run data is escaped."""
     counts = {name: sum(run["status"] == name for run in runs) for name in ("open", "done", "parked", "abandoned")}
     selected = next((run for run in runs if run["id"] == selected_id), None)
     has_telemetry = any((run["end"] or {}).get("telemetry") for run in runs if run["end"])
+    total_cost = sum(c for c in (_run_cost(run) for run in runs) if isinstance(c, (int, float)))
     rows = []
     for run in runs:
         start = run["start"]
@@ -158,9 +177,10 @@ def render_page(runs, selected_id=None, error=None):
           <td><a class=run-link href="/?run={run_id}#detail">{task}<small>{run_id}</small></a></td>
           <td>{agent}</td><td>{escape(_display_time(run['started_at']))}</td>
           <td>{escape(_duration(run))}</td><td><span class="status {status}">{status}</span></td>
+          <td>{_format_cost_cell(run)}</td>
         </tr>""")
     if rows:
-        table = """<div class=table-wrap><table><thead><tr><th>Task</th><th>Agent</th><th>Started</th><th>Duration</th><th>Status</th></tr></thead>
+        table = """<div class=table-wrap><table><thead><tr><th>Task</th><th>Agent</th><th>Started</th><th>Duration</th><th>Status</th><th>Cost</th></tr></thead>
         <tbody>""" + "".join(rows) + "</tbody></table></div>"
     else:
         table = "<p class=empty>No runs recorded yet. Start a task with clear-mode to add one.</p>"
@@ -190,7 +210,8 @@ td:nth-child(2),td:nth-child(3),td:nth-child(4){{font-size:13px;color:var(--mute
 <header><div><p class=brand>ClearStack / local run log</p><h1>Runs</h1></div><span class=local>LOCAL ONLY · 127.0.0.1</span></header>
 <div class=summary><div class=metric><strong>{len(runs)}</strong><span>runs</span></div>
 <div class=metric><strong>{counts['open']}</strong><span>open</span></div><div class=metric><strong>{counts['done']}</strong><span>done</span></div>
-<div class=metric><strong>{counts['parked']}</strong><span>parked</span></div></div>
+<div class=metric><strong>{counts['parked']}</strong><span>parked</span></div>
+{f'<div class=metric><strong>${total_cost:.2f}</strong><span>total cost</span></div>' if has_telemetry else ''}</div>
 {"" if has_telemetry else '<div class=telemetry><strong>Token and tool telemetry is not collected yet.</strong> No run in this log has it. Open a run detail to check once one does. Totals are not shown as zero.</div>'}
 {error_html}<section><div class=section-title><h2>Recent runs</h2><span class=count>newest first</span></div>{table}</section>
 {detail_html}{missing}</main></body></html>"""

@@ -58,6 +58,27 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("Token and tool telemetry is not collected yet", page)
         self.assertIn("<title>ClearStack runs</title>", page)
 
+    def test_run_with_telemetry_shows_cost_in_table_summary_and_detail(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "r1", "task": "priced run", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "end", "run": "r1", "status": "done",
+             "verified": [], "unverified": [],
+             "telemetry": {"source": "hermes", "tokens": {"input": 100, "output": 20, "cache_read": 0, "cache_write": 0},
+                           "cost_usd": 1.2345, "tool_calls": 7}},
+        )
+
+        page = render_page(load_runs(self.log))
+
+        self.assertNotIn("Token and tool telemetry is not collected yet", page)
+        self.assertIn("$1.23", page)
+        self.assertIn("total cost", page)
+        self.assertIn("<th>Cost</th>", page)
+
+        detail = render_page(load_runs(self.log), selected_id="r1")
+        self.assertIn("Telemetry · hermes", detail)
+        self.assertIn("$1.2345", detail)
+        self.assertIn("7", detail)
+
 
 if __name__ == "__main__":
     unittest.main()
