@@ -21,7 +21,7 @@ The repo's `AGENTS.md` or `CLAUDE.md` and the operator's instructions win wherev
 ## Every run
 
 1. **Open the run record.** From this skill's directory, run `scripts/record start --task "<the task in one line>" --playbook <name or none>` and keep the printed run id. Done when you hold an id.
-2. **Pick principles.** Read the index below and open each principle file that applies to this task before you act on it. Done when every principle you rely on has been read this session.
+2. **Pick principles and playbooks.** Read the index below and open each principle file, and any playbook that applies, before you act on it. Done when every principle and playbook you rely on has been read this session.
 3. **Work to done autonomously.** See **Autonomy**. Add `--trailer "Clear-Run: <id>"` to every commit the run makes. Log each non-obvious decision with `scripts/record note <id> "<decision, alternatives, why>"`. When the operator's request or the open question changes, a follow-up redirects the work, you finish one sub-goal and move to the next, or you are blocked on a specific decision, call `scripts/record focus <id> "<the current request or question, one line>"` so a long run's goal stays visible instead of buried under the output since it was last stated.
 4. **Close the run record.** Run `scripts/record end <id> --status done|parked|abandoned`, with one `--verified "<claim>: <evidence>"` per proven claim, one `--unverified "<claim>"` per claim you could not prove, `--needs "<decision>"` when parked, and `--pr` when there is one. Done when every claim your reply will make appears in the record as verified or unverified.
 5. **Reply.** Report each state separately (see **separate-the-states**), put evidence beside each claim, and name each principle that changed a decision and the decision it changed. Write the reply, commit messages, PR bodies, and record notes in the `clear-voice` style.
@@ -78,6 +78,16 @@ Each file in `references/principles/` gives the rule, when it applies, the decis
 **Mutability**
 - `experiment-before-asking`: about to ask which approach, what something does, or whether it will work.
 - `parallelize-independent-work`: starting a task with two or more independent, parallelizable sub-tasks.
+
+## Playbooks
+
+Each file in `references/playbooks/` gives the trigger, principles, steps, and stop conditions for a common task shape.
+
+- **Investigate:** [`references/playbooks/investigate.md`](references/playbooks/investigate.md). A symptom, error, or behavior needs explanation.
+- **Bug-fix:** [`references/playbooks/bug-fix.md`](references/playbooks/bug-fix.md). A specific, reproducible failure needs a code change.
+- **Feature:** [`references/playbooks/feature.md`](references/playbooks/feature.md). New behavior is needed and the interface is not yet fixed.
+- **Review:** [`references/playbooks/review.md`](references/playbooks/review.md). A diff or PR needs judgment before it merges.
+- **Pickup/handoff:** [`references/playbooks/pickup-handoff.md`](references/playbooks/pickup-handoff.md). A parked run or handoff note needs to be resumed.
 
 ## Harness notes
 

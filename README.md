@@ -91,6 +91,16 @@ Each principle is one short file in [`skills/clear-mode/references/principles/`]
 | Repairability | [fix-at-the-right-layer](skills/clear-mode/references/principles/fix-at-the-right-layer.md), [fail-loudly-and-locally](skills/clear-mode/references/principles/fail-loudly-and-locally.md), [prefer-reversible-changes](skills/clear-mode/references/principles/prefer-reversible-changes.md) |
 | Mutability | [experiment-before-asking](skills/clear-mode/references/principles/experiment-before-asking.md) |
 
+## Playbooks
+
+Each playbook in [`skills/clear-mode/references/playbooks/`](skills/clear-mode/references/playbooks/) gives the trigger, principles, steps, and stop conditions for a common task shape. Pick one when you start a run.
+
+- **Investigate:** [investigate.md](skills/clear-mode/references/playbooks/investigate.md)
+- **Bug-fix:** [bug-fix.md](skills/clear-mode/references/playbooks/bug-fix.md)
+- **Feature:** [feature.md](skills/clear-mode/references/playbooks/feature.md)
+- **Review:** [review.md](skills/clear-mode/references/playbooks/review.md)
+- **Pickup/handoff:** [pickup-handoff.md](skills/clear-mode/references/playbooks/pickup-handoff.md)
+
 ## Run records
 
 Every clear-mode run appends to `~/.local/state/clearstack/runs.jsonl` on your machine. The log never leaves it. A record holds the task, the harness and session, the git state at start and end, the decision trail, and the claims:
@@ -123,7 +133,8 @@ The dashboard should also preserve the user's original request and pending decis
 | 1 | `clear-mode`, principles, `scripts/record` | merged |
 | 1b | `clear-voice` output style and `voice-check` | merged |
 | 1c | `clear-ci`: fail-fast CI watcher, `scripts/watch` | merged |
-| 2 | Playbooks: investigate, bug-fix, feature, review, ship, pickup/handoff | planned |
+| 2 | Playbooks: investigate, bug-fix, feature, review, pickup/handoff | merged |
+| 2b | Playbook: ship | planned |
 | 3 | `clear-stats`: outcomes, claim vs proof, rework, corrections, and cost across Claude Code, Codex, Hermes, and GitHub | planned |
 | 4 | `clear-reflect`: mine transcripts for repeated corrections and repeated tool-call chains, and propose principles, guards, or scripts | planned |
 | 5 | Local dashboard: read-only view of run records | in progress; telemetry now reads from the harness session log when available |
