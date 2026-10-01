@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from clearstack.dashboard import default_log_path, load_runs, render_page
+from clearstack.dashboard import create_server, default_log_path, load_runs, parse_args, render_page
 
 
 class DashboardTest(unittest.TestCase):
@@ -37,6 +37,18 @@ class DashboardTest(unittest.TestCase):
         home = Path(self.temp.name) / "home"
         with patch.dict("os.environ", {"XDG_STATE_HOME": ""}), patch("clearstack.dashboard.Path.home", return_value=home):
             self.assertEqual(default_log_path(), home / ".local" / "state" / "clearstack" / "runs.jsonl")
+
+    def test_dashboard_defaults_to_loopback_and_accepts_a_specific_host(self):
+        self.assertEqual(parse_args([]).host, "127.0.0.1")
+        self.assertEqual(parse_args(["--host", "mochi", "--port", "8765"]).host, "mochi")
+
+    def test_server_binds_the_requested_resolved_host(self):
+        server = create_server(host="localhost", port=0)
+        try:
+            self.assertEqual(server.server_address[0], "127.0.0.1")
+            self.assertGreater(server.server_address[1], 0)
+        finally:
+            server.server_close()
 
     def test_groups_events_by_run_and_sorts_newest_first(self):
         self.write_events(

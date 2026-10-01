@@ -306,7 +306,7 @@ td:nth-child(2),td:nth-child(3),td:nth-child(4){{font-size:13px;color:var(--mute
 .usage{{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin:12px 0}}.usage dd{{font:600 17px ui-monospace,monospace}}.usage-chart{{margin:28px 0 34px}}.usage-chart h2{{margin-bottom:0}}.usage-row{{display:grid;grid-template-columns:minmax(100px,1fr) minmax(80px,2fr) 70px;align-items:center;gap:12px;padding:7px 0;border-bottom:1px solid var(--line);font-size:12px}}.usage-row>span{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.usage-row strong{{font:12px ui-monospace,monospace;text-align:right}}.bar-track{{height:8px;background:#e1dcd7}}.bar{{height:100%;background:var(--pink)}}
 @media(max-width:700px){{main{{padding:25px 16px 48px}}header{{align-items:flex-start;flex-direction:column}}.table-wrap{{overflow-x:auto}}table{{min-width:660px}}.summary{{gap:18px}}}}
 </style></head><body><main>
-<header><div><p class=brand>ClearStack / local run log</p><h1>Runs</h1></div><span class=local>LOCAL ONLY · 127.0.0.1</span></header>
+<header><div><p class=brand>ClearStack / local run log</p><h1>Runs</h1></div><span class=local>LOCAL DASHBOARD</span></header>
 <div class=summary><div class=metric><strong>{len(runs)}</strong><span>runs</span></div>
 <div class=metric><strong>{counts['open']}</strong><span>open</span></div><div class=metric><strong>{counts['done']}</strong><span>done</span></div>
 <div class=metric><strong>{counts['parked']}</strong><span>parked</span></div></div>
@@ -343,14 +343,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return
 
 
-def main():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Serve the local ClearStack run dashboard")
-    parser.add_argument("--port", type=int, default=8765, help="loopback port (default: 8765)")
-    args = parser.parse_args()
+    parser.add_argument("--host", default="127.0.0.1", help="interface address to bind (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8765, help="port to serve on (default: 8765)")
+    args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error("port must be between 0 and 65535")
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), DashboardHandler)
-    print(f"ClearStack dashboard: http://127.0.0.1:{server.server_port}")
+    return args
+
+
+def create_server(host="127.0.0.1", port=8765):
+    return ThreadingHTTPServer((host, port), DashboardHandler)
+
+
+def main():
+    args = parse_args()
+    server = create_server(args.host, args.port)
+    print(f"ClearStack dashboard: http://{args.host}:{server.server_port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
