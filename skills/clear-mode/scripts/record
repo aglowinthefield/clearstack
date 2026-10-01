@@ -194,6 +194,7 @@ def require_run(run_id):
 
 def start(args):
     run_id = f"cr-{datetime.now(timezone.utc):%Y%m%d}-{secrets.token_hex(3)}"
+    parent_run = args.parent_run or os.environ.get("CLEARSTACK_PARENT_RUN")
     append({
         "event": "start",
         "run": run_id,
@@ -205,6 +206,8 @@ def start(args):
             or os.environ.get("CODEX_THREAD_ID")
             or os.environ.get("HERMES_SESSION_ID")
         ),
+        "parent_run_id": parent_run,
+        "spawned_by": args.spawned_by if parent_run else None,
         **git_state(),
     })
     print(run_id)
@@ -239,6 +242,9 @@ def main():
     p = sub.add_parser("start", help="open a run and print its id")
     p.add_argument("--task", required=True, help="the task in one line")
     p.add_argument("--playbook", default="none")
+    p.add_argument("--parent-run", help="the run id that spawned this one, when this is a subagent")
+    p.add_argument("--spawned-by", default="subagent",
+                    help="how this run was spawned (e.g. delegate_task, subagent). Only recorded with --parent-run.")
     p.set_defaults(func=start)
 
     p = sub.add_parser("note", help="add a decision to the run's trail")

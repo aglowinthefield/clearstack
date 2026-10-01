@@ -49,6 +49,8 @@ def load_runs(path=None):
             "events": events,
             "started_at": start.get("ts", ""),
             "status": end.get("status", "open") if end else "open",
+            "parent_run_id": start.get("parent_run_id"),
+            "spawned_by": start.get("spawned_by"),
         })
     return sorted(runs, key=lambda run: (run["started_at"], run["id"]), reverse=True)
 
@@ -115,16 +117,32 @@ def _telemetry_section(end):
       </dl></section>"""
 
 
-def _detail(run):
+def _detail(run, runs_by_id):
     start = run["start"]
     end = run["end"] or {}
     notes = [event.get("text", "") for event in run["events"] if event.get("event") == "note"]
     note_html = "".join(f"<li>{escape(str(note))}</li>" for note in notes)
     if not note_html:
         note_html = "<li class=muted>No decision notes recorded.</li>"
+    parent, children = _run_family(run, runs_by_id)
+    parent_html = ""
+    if parent:
+        parent_task = escape(str(parent["start"].get("task") or "Untitled run"))
+        parent_html = (f'<p class=lineage>Spawned by <a href="/?run={escape(parent["id"], quote=True)}#detail">'
+                        f"{parent_task}</a></p>")
+    children_html = ""
+    if children:
+        items = "".join(
+            f'<li><a href="/?run={escape(c["id"], quote=True)}#detail">'
+            f'{escape(str(c["start"].get("task") or "Untitled run"))}</a> '
+            f'<span class="status {escape(c["status"])}">{escape(c["status"])}</span></li>'
+            for c in children
+        )
+        children_html = f'<section><h3>Subagents ({len(children)})</h3><ul class=lineage-list>{items}</ul></section>'
     return f"""<section class="detail glass" id=detail>
       <div class=detail-head><div><p class=eyebrow>RUN DETAIL</p><h2>{escape(run['id'])}</h2></div>
       <a class=back href="/">All runs</a></div>
+      {parent_html}
       <p class=task>{escape(str(start.get('task') or 'Untitled run'))}</p>
       <dl class=metadata>
         <div><dt>Agent</dt><dd>{escape(str(start.get('agent') or 'Unknown'))}</dd></div>
@@ -134,13 +152,63 @@ def _detail(run):
         <div><dt>Branch</dt><dd>{escape(str(start.get('branch') or '—'))}</dd></div>
         <div><dt>Commit</dt><dd><code>{escape(str(start.get('head') or '—'))}</code></dd></div>
       </dl>
+      {_subagent_banner(run)}
       <section><h3>Decision notes</h3><ul>{note_html}</ul></section>
       {_telemetry_section(end)}
       {_claims('Verified', end.get('verified', []))}
       {_claims('Unverified', end.get('unverified', []))}
       {f"<section><h3>Needs</h3><p>{escape(str(end['needs']))}</p></section>" if end.get('needs') else ''}
       {f"<section><h3>Pull request</h3><p>{escape(str(end['pr']))}</p></section>" if end.get('pr') else ''}
+      {children_html}
     </section>"""
+
+
+def _build_run_tree(runs):
+    """Order runs newest-root-first with each run's children following it, depth-first.
+
+    A run whose parent_run_id does not match any run in this log (unknown
+    parent, or the parent run lives in a different log) is treated as a root
+    so no run silently disappears from the list.
+    """
+    by_id = {run["id"]: run for run in runs}
+    children_of = {}
+    roots = []
+    for run in runs:
+        parent_id = run.get("parent_run_id")
+        if parent_id and parent_id in by_id:
+            children_of.setdefault(parent_id, []).append(run)
+        else:
+            roots.append(run)
+
+    ordered = []
+
+    def visit(run, depth):
+        ordered.append((run, depth))
+        for child in children_of.get(run["id"], []):
+            visit(child, depth + 1)
+
+    for run in roots:
+        visit(run, 0)
+    return ordered
+
+
+def _run_family(run, runs_by_id):
+    """Return (parent_run, child_runs) for the detail view, parent may be None."""
+    parent_id = run.get("parent_run_id")
+    parent = runs_by_id.get(parent_id) if parent_id else None
+    children = [r for r in runs_by_id.values() if r.get("parent_run_id") == run["id"]]
+    children.sort(key=lambda r: r["started_at"])
+    return parent, children
+
+
+def _subagent_banner(run):
+    if not run.get("parent_run_id"):
+        return ""
+    spawned_by = escape(str(run.get("spawned_by") or "a subagent"))
+    return (f'<div class="telemetry glass subagent-banner">'
+            f"<strong>Self-reported by {spawned_by}.</strong> "
+            "This run's claims are a subagent's own report, not verified evidence, "
+            "until the parent run's output confirms them.</div>")
 
 
 def _run_cost(run):
@@ -209,18 +277,21 @@ def _activity_feed(runs):
 def render_page(runs, selected_id=None, error=None, bind_host="127.0.0.1"):
     """Render one self-contained HTML page. All run data is escaped."""
     counts = {name: sum(run["status"] == name for run in runs) for name in ("open", "done", "parked", "abandoned")}
-    selected = next((run for run in runs if run["id"] == selected_id), None)
+    runs_by_id = {run["id"]: run for run in runs}
+    selected = runs_by_id.get(selected_id) if selected_id else None
     has_telemetry = any((run["end"] or {}).get("telemetry") for run in runs if run["end"])
     total_cost = sum(c for c in (_run_cost(run) for run in runs) if isinstance(c, (int, float)))
     rows = []
-    for run in runs:
+    for run, depth in _build_run_tree(runs):
         start = run["start"]
         task = escape(str(start.get("task") or "Untitled run"))
         agent = escape(str(start.get("agent") or "Unknown"))
         run_id = escape(run["id"], quote=True)
         status = escape(str(run["status"]))
+        indent = f' style="padding-left:{14 + depth * 18}px"' if depth else ""
+        lineage_mark = '<span class=lineage-mark title="subagent run">↳</span> ' if depth else ""
         rows.append(f"""<tr>
-          <td><a class=run-link href="/?run={run_id}#detail">{task}<small>{run_id}</small></a></td>
+          <td{indent}>{lineage_mark}<a class=run-link href="/?run={run_id}#detail">{task}<small>{run_id}</small></a></td>
           <td>{agent}</td><td>{escape(_display_time(run['started_at']))}</td>
           <td data-duration data-started="{escape(str(run['started_at']), quote=True)}" data-status="{status}">{escape(_duration(run))}</td><td><span class="status {status}">{status}</span></td>
           <td>{_format_cost_cell(run)}</td>
@@ -232,7 +303,7 @@ def render_page(runs, selected_id=None, error=None, bind_host="127.0.0.1"):
         table = "<p class=empty>No runs recorded yet. Start a task with clear-mode to add one.</p>"
 
     error_html = f"<p class=error>{escape(error)}</p>" if error else ""
-    detail_html = _detail(selected) if selected else ""
+    detail_html = _detail(selected, runs_by_id) if selected else ""
     missing = f"<p class=empty>Run '{escape(selected_id)}' was not found.</p>" if selected_id and not selected else ""
     return f"""<!doctype html>
 <html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
@@ -312,6 +383,13 @@ ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}
 .muted,.empty{{color:var(--muted)}}.empty{{padding:25px 0}}
 .error{{color:#8c243d;background:rgba(199,90,108,.14);padding:12px;border-radius:10px}}
 .table-wrap{{padding-bottom:6px}}
+.lineage-mark{{color:var(--muted);font-weight:700}}
+.lineage{{font-size:12px;color:var(--muted);margin:0 0 10px}}
+.lineage a{{color:var(--aqua-deep);text-decoration:none}}.lineage a:hover{{text-decoration:underline}}
+.lineage-list{{list-style:none;padding:0;margin:5px 0}}
+.lineage-list li{{display:flex;align-items:center;gap:8px;padding:4px 0}}
+.lineage-list a{{color:var(--ink);text-decoration:none}}.lineage-list a:hover{{color:var(--aqua-deep)}}
+.subagent-banner{{border-left-color:var(--amber)}}
 @media(max-width:700px){{main{{padding:25px 16px 48px}}header.glass{{align-items:flex-start;flex-direction:column}}
   .table-wrap{{overflow-x:auto}}table{{min-width:660px}}.summary.glass{{gap:18px}}}}
 @media(max-width:860px){{.columns{{grid-template-columns:1fr}}}}

@@ -54,6 +54,27 @@ class RecordTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual([e["event"] for e in self.log()], ["start"])
 
+    def test_start_with_parent_run_records_the_link(self):
+        parent_id = self.run_record("start", "--task", "parent task").stdout.strip()
+        child_id = self.run_record("start", "--task", "child task",
+                                    "--parent-run", parent_id, "--spawned-by", "delegate_task").stdout.strip()
+        log = self.log()
+        child_start = next(e for e in log if e["run"] == child_id and e["event"] == "start")
+        self.assertEqual(child_start["parent_run_id"], parent_id)
+        self.assertEqual(child_start["spawned_by"], "delegate_task")
+
+    def test_start_without_parent_run_has_no_lineage_fields(self):
+        run_id = self.run_record("start", "--task", "standalone").stdout.strip()
+        start = next(e for e in self.log() if e["run"] == run_id)
+        self.assertIsNone(start["parent_run_id"])
+        self.assertIsNone(start["spawned_by"])
+
+    def test_parent_run_env_var_is_used_when_flag_omitted(self):
+        self.env["CLEARSTACK_PARENT_RUN"] = "cr-from-env"
+        run_id = self.run_record("start", "--task", "env-linked child").stdout.strip()
+        start = next(e for e in self.log() if e["run"] == run_id)
+        self.assertEqual(start["parent_run_id"], "cr-from-env")
+
     def test_end_without_a_harness_session_id_has_no_telemetry(self):
         env = {k: v for k, v in self.env.items()
                if k not in ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "HERMES_SESSION_ID")}

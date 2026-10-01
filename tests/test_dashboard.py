@@ -121,6 +121,56 @@ class DashboardTest(unittest.TestCase):
         page = render_page(load_runs(self.log))
         self.assertIn("No activity yet", page)
 
+    def test_table_nests_subagent_run_under_its_parent(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "parent1", "task": "parent task", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "start", "run": "child1", "task": "child task",
+             "agent": "hermes", "parent_run_id": "parent1", "spawned_by": "delegate_task"},
+        )
+
+        page = render_page(load_runs(self.log))
+
+        idx_parent = page.index("parent task")
+        idx_child = page.index("child task")
+        self.assertLess(idx_parent, idx_child)
+        self.assertIn("lineage-mark", page)
+
+    def test_detail_shows_parent_link_and_self_report_banner_for_a_child_run(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "parent1", "task": "parent task", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "start", "run": "child1", "task": "child task",
+             "agent": "hermes", "parent_run_id": "parent1", "spawned_by": "delegate_task"},
+        )
+
+        detail = render_page(load_runs(self.log), selected_id="child1")
+
+        self.assertIn("Spawned by", detail)
+        self.assertIn("parent task", detail)
+        self.assertIn("Self-reported by delegate_task", detail)
+        self.assertIn("not verified evidence", detail)
+
+    def test_detail_lists_child_runs_for_a_parent(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "parent1", "task": "parent task", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "start", "run": "child1", "task": "child task",
+             "agent": "hermes", "parent_run_id": "parent1", "spawned_by": "delegate_task"},
+        )
+
+        detail = render_page(load_runs(self.log), selected_id="parent1")
+
+        self.assertIn("Subagents (1)", detail)
+        self.assertIn("child task", detail)
+        self.assertNotIn("Self-reported by", detail)
+
+    def test_run_with_unknown_parent_id_is_not_dropped(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "orphan1", "task": "orphan task",
+             "agent": "hermes", "parent_run_id": "does-not-exist", "spawned_by": "subagent"},
+        )
+
+        page = render_page(load_runs(self.log))
+        self.assertIn("orphan task", page)
+
 
 class SSETest(unittest.TestCase):
     def test_events_endpoint_pushes_update_when_the_log_file_changes(self):
