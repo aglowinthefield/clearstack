@@ -214,7 +214,23 @@ td:nth-child(2),td:nth-child(3),td:nth-child(4){{font-size:13px;color:var(--mute
 {f'<div class=metric><strong>${total_cost:.2f}</strong><span>total cost</span></div>' if has_telemetry else ''}</div>
 {"" if has_telemetry else '<div class=telemetry><strong>Token and tool telemetry is not collected yet.</strong> No run in this log has it. Open a run detail to check once one does. Totals are not shown as zero.</div>'}
 {error_html}<section><div class=section-title><h2>Recent runs</h2><span class=count>newest first</span></div>{table}</section>
-{detail_html}{missing}</main></body></html>"""
+{detail_html}{missing}</main>
+<script>
+(function(){{
+  var poll = function(){{
+    fetch(location.href, {{cache: "no-store"}}).then(function(r){{ return r.text(); }}).then(function(html){{
+      var next = new DOMParser().parseFromString(html, "text/html");
+      var nextMain = next.querySelector("main");
+      var curMain = document.querySelector("main");
+      if (nextMain && curMain && nextMain.innerHTML !== curMain.innerHTML) {{
+        curMain.innerHTML = nextMain.innerHTML;
+      }}
+    }}).catch(function(){{}});
+  }};
+  setInterval(poll, 4000);
+}})();
+</script>
+</body></html>"""
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -239,7 +255,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+        self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(body)
 

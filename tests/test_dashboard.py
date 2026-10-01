@@ -80,5 +80,10 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("7", detail)
 
 
+    def test_page_includes_a_polling_script_for_realtime_updates(self):
+        page = render_page(load_runs(self.log))
+        self.assertIn("setInterval(poll", page)
+        self.assertIn("</script>", page)
+
 if __name__ == "__main__":
     unittest.main()
