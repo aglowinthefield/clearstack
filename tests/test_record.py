@@ -48,6 +48,23 @@ class RecordTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("no run", result.stderr)
 
+    def test_focus_updates_are_logged_as_distinct_events(self):
+        run_id = self.run_record("start", "--task", "migrate billing").stdout.strip()
+        self.run_record("focus", run_id, "waiting on which rollout strategy to use")
+        self.run_record("focus", run_id, "rollout decided, now wiring the flag")
+        self.run_record("end", run_id, "--status", "done")
+
+        log = self.log()
+        focus_events = [e for e in log if e["event"] == "focus"]
+        self.assertEqual(len(focus_events), 2)
+        self.assertEqual(focus_events[0]["text"], "waiting on which rollout strategy to use")
+        self.assertEqual(focus_events[-1]["text"], "rollout decided, now wiring the flag")
+
+    def test_focus_on_unknown_run_is_refused(self):
+        result = self.run_record("focus", "cr-19700101-000000", "some update")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no run", result.stderr)
+
     def test_parked_run_must_name_the_decision_it_needs(self):
         run_id = self.run_record("start", "--task", "migrate store").stdout.strip()
         result = self.run_record("end", run_id, "--status", "parked")

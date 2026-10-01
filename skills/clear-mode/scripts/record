@@ -363,6 +363,11 @@ def note(args):
     append({"event": "note", "run": args.run, "text": args.text})
 
 
+def focus(args):
+    require_run(args.run)
+    append({"event": "focus", "run": args.run, "text": args.text})
+
+
 def _telemetry_baseline(run_id):
     path = log_path()
     if not path.exists():
@@ -408,6 +413,12 @@ def main():
     p.add_argument("run")
     p.add_argument("text", help="decision, alternatives considered, and why")
     p.set_defaults(func=note)
+
+    p = sub.add_parser("focus", help="update the run's current pending focus")
+    p.add_argument("run")
+    p.add_argument("text", help="the request or open question driving the run right now, "
+                                 "in one line; call again to replace it as the goal shifts")
+    p.set_defaults(func=focus)
 
     p = sub.add_parser("end", help="close a run with its claims")
     p.add_argument("run")

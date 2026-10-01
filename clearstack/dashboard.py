@@ -40,6 +40,7 @@ def load_runs(path=None):
     for run_id, events in events_by_run.items():
         starts = [event for event in events if event.get("event") == "start"]
         ends = [event for event in events if event.get("event") == "end"]
+        focuses = [event for event in events if event.get("event") == "focus"]
         start = starts[0] if starts else {}
         end = ends[-1] if ends else None
         runs.append({
@@ -51,6 +52,7 @@ def load_runs(path=None):
             "status": end.get("status", "open") if end else "open",
             "parent_run_id": start.get("parent_run_id"),
             "spawned_by": start.get("spawned_by"),
+            "current_focus": focuses[-1].get("text") if focuses else None,
         })
     return sorted(runs, key=lambda run: (run["started_at"], run["id"]), reverse=True)
 
@@ -178,6 +180,14 @@ def _telemetry_section(end):
     </section>"""
 
 
+def _focus_callout(run):
+    focus = run.get("current_focus")
+    if not focus:
+        return ""
+    return (f'<div class="telemetry glass focus-callout">'
+            f"<strong>Current focus</strong><p>{escape(str(focus))}</p></div>")
+
+
 def _detail(run, runs_by_id):
     start = run["start"]
     end = run["end"] or {}
@@ -205,6 +215,7 @@ def _detail(run, runs_by_id):
       <a class=back href="/">All runs</a></div>
       {parent_html}
       <p class=task>{escape(str(start.get('task') or 'Untitled run'))}</p>
+      {_focus_callout(run)}
       <dl class=metadata>
         <div><dt>Agent</dt><dd>{escape(str(start.get('agent') or 'Unknown'))}</dd></div>
         <div><dt>Started</dt><dd>{escape(_display_time(run['started_at']))}</dd></div>
@@ -290,13 +301,13 @@ def _format_cost_cell(run):
     return f"{escape(cost_text)}<small>{escape(calls_text)}</small>" if calls_text else escape(cost_text)
 
 
-_EVENT_LABELS = {"start": "started", "note": "noted", "end": "finished"}
+_EVENT_LABELS = {"start": "started", "note": "noted", "focus": "focus", "end": "finished"}
 
 
 def _event_summary(event, task_by_run):
     kind = event.get("event")
     task = task_by_run.get(event.get("run"), "Untitled run")
-    if kind == "note":
+    if kind in ("note", "focus"):
         text = str(event.get("text") or "")
         return text if len(text) <= 140 else text[:137] + "…"
     if kind == "end":
@@ -362,8 +373,10 @@ def render_page(runs, selected_id=None, error=None, bind_host="127.0.0.1"):
         status = escape(str(run["status"]))
         indent = f' style="padding-left:{14 + depth * 18}px"' if depth else ""
         lineage_mark = '<span class=lineage-mark title="subagent run">↳</span> ' if depth else ""
+        focus_hint = (f'<small class=focus-hint>→ {escape(str(run["current_focus"]))}</small>'
+                      if run["status"] == "open" and run.get("current_focus") else "")
         rows.append(f"""<tr>
-          <td{indent}>{lineage_mark}<a class=run-link href="/?run={run_id}#detail">{task}<small>{run_id}</small></a></td>
+          <td{indent}>{lineage_mark}<a class=run-link href="/?run={run_id}#detail">{task}<small>{run_id}</small>{focus_hint}</a></td>
           <td>{agent}</td><td>{escape(_display_time(run['started_at']))}</td>
           <td data-duration data-started="{escape(str(run['started_at']), quote=True)}" data-status="{status}">{escape(_duration(run))}</td><td><span class="status {status}">{status}</span></td>
           <td>{_format_cost_cell(run)}</td>
@@ -496,6 +509,9 @@ ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}
 .lineage-list li{{display:flex;align-items:center;gap:8px;padding:4px 0}}
 .lineage-list a{{color:var(--ink);text-decoration:none}}.lineage-list a:hover{{color:var(--aqua-deep)}}
 .subagent-banner{{border-left-color:var(--amber)}}
+.focus-callout{{border-left-color:var(--mint)}}.focus-callout strong{{display:block;margin-bottom:3px}}.focus-callout p{{margin:0}}
+.focus-hint{{color:var(--aqua-deep)!important;font-style:italic}}
+.activity-item.kind-focus .activity-dot{{background:var(--amber)}}
 @media(max-width:700px){{main{{padding:25px 16px 48px}}header.glass{{align-items:flex-start;flex-direction:column}}
   .table-wrap{{overflow-x:auto}}table{{min-width:660px}}.summary.glass{{gap:18px}}}}
 @media(max-width:860px){{.columns{{grid-template-columns:1fr}}}}

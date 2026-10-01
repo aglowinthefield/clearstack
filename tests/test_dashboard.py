@@ -59,6 +59,59 @@ class DashboardTest(unittest.TestCase):
 
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", page)
         self.assertNotIn("<script>alert(1)</script>", page)
+
+    def test_current_focus_is_the_latest_focus_event(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "r1", "task": "migrate billing", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "focus", "run": "r1", "text": "picking rollout strategy"},
+            {"ts": "2026-10-01T10:02:00+00:00", "event": "focus", "run": "r1", "text": "wiring the flag now"},
+        )
+
+        runs = load_runs(self.log)
+
+        self.assertEqual(runs[0]["current_focus"], "wiring the flag now")
+
+    def test_run_with_no_focus_event_has_none_current_focus(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "r1", "task": "quick fix", "agent": "hermes"},
+        )
+
+        self.assertIsNone(load_runs(self.log)[0]["current_focus"])
+
+    def test_detail_view_renders_the_focus_callout(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "r1", "task": "migrate billing", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "focus", "run": "r1", "text": "<b>waiting</b> on rollout call"},
+        )
+
+        page = render_page(load_runs(self.log), selected_id="r1")
+
+        self.assertIn("Current focus", page)
+        self.assertIn("&lt;b&gt;waiting&lt;/b&gt; on rollout call", page)
+
+    def test_table_row_shows_focus_hint_only_for_open_runs(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "open-run", "task": "ongoing work", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "focus", "run": "open-run", "text": "blocked on review"},
+            {"ts": "2026-10-01T09:00:00+00:00", "event": "start", "run": "closed-run", "task": "finished work", "agent": "hermes"},
+            {"ts": "2026-10-01T09:01:00+00:00", "event": "focus", "run": "closed-run", "text": "stale focus text"},
+            {"ts": "2026-10-01T09:02:00+00:00", "event": "end", "run": "closed-run", "status": "done"},
+        )
+
+        page = render_page(load_runs(self.log))
+        table_section = page.split("<section class=\"panel glass activity-panel\"")[0]
+
+        self.assertIn("blocked on review", table_section)
+        self.assertNotIn("stale focus text", table_section)
+
+    def test_page_shows_no_telemetry_banner_and_renders_title(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "r1", "task": "plain run", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "end", "run": "r1", "status": "done", "verified": [], "unverified": []},
+        )
+
+        page = render_page(load_runs(self.log))
+
         self.assertIn("Token and tool telemetry is not collected yet", page)
         self.assertIn("<title>ClearStack runs</title>", page)
 
