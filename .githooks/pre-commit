@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Run clear-voice checks on staged Markdown files.
+
+staged=$(git diff --cached --name-only --diff-filter=ACM | grep '\.md$' || true)
+
+if [ -z "$staged" ]; then
+    exit 0
+fi
+
+exec skills/clear-voice/scripts/voice-check $staged

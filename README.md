@@ -140,6 +140,12 @@ python3 -m unittest discover -s tests
 
 Claude Code reads `~/.claude/skills`, so link it there too. Everything is standard-library Python, including the logo: `python3 assets/make_logo.py` redraws `assets/logo.png`.
 
+Enable the pre-commit hook so clear-voice violations are caught before they reach `main`:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Credit
 
 Inspired by [pstack](https://github.com/cursor/plugins/tree/main/pstack) by poteto.
