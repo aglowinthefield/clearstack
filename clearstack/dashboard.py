@@ -161,6 +161,51 @@ def _format_cost_cell(run):
     return f"{escape(cost_text)}<small>{escape(calls_text)}</small>" if calls_text else escape(cost_text)
 
 
+_EVENT_LABELS = {"start": "started", "note": "noted", "end": "finished"}
+
+
+def _event_summary(event, task_by_run):
+    kind = event.get("event")
+    task = task_by_run.get(event.get("run"), "Untitled run")
+    if kind == "note":
+        text = str(event.get("text") or "")
+        return text if len(text) <= 140 else text[:137] + "…"
+    if kind == "end":
+        status = event.get("status") or "done"
+        return f"{task} — {status}"
+    return task
+
+
+def _recent_events(runs, limit=12):
+    """Flatten every run's events into one newest-first activity feed."""
+    task_by_run = {run["id"]: str(run["start"].get("task") or "Untitled run") for run in runs}
+    all_events = [event for run in runs for event in run["events"] if event.get("event") in _EVENT_LABELS]
+    all_events.sort(key=lambda event: (event.get("ts") or "", event.get("run") or ""), reverse=True)
+    return [
+        {
+            "ts": event.get("ts") or "",
+            "run": event.get("run") or "",
+            "kind": event.get("event"),
+            "label": _EVENT_LABELS.get(event.get("event"), event.get("event")),
+            "summary": _event_summary(event, task_by_run),
+        }
+        for event in all_events[:limit]
+    ]
+
+
+def _activity_feed(runs):
+    events = _recent_events(runs)
+    if not events:
+        return "<p class=empty>No activity yet. Start a run with clear-mode to see it here.</p>"
+    items = "".join(f"""<li class="activity-item kind-{escape(e['kind'])}">
+      <span class=activity-dot></span>
+      <div><span class=activity-label>{escape(e['label'])}</span>
+      <a class=activity-link href="/?run={escape(e['run'], quote=True)}#detail">{escape(e['summary'])}</a>
+      <time>{escape(_display_time(e['ts']))}</time></div>
+    </li>""" for e in events)
+    return f"<ul class=activity-list>{items}</ul>"
+
+
 def render_page(runs, selected_id=None, error=None, bind_host="127.0.0.1"):
     """Render one self-contained HTML page. All run data is escaped."""
     counts = {name: sum(run["status"] == name for run in runs) for name in ("open", "done", "parked", "abandoned")}
@@ -210,9 +255,11 @@ h1{{font-size:clamp(26px,4vw,38px);line-height:1;margin:0;letter-spacing:-.03em;
 .brand{{color:var(--aqua-deep);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin:0 0 8px}}
 .head-right{{display:flex;align-items:center;gap:10px}}
 .live{{display:flex;align-items:center;gap:7px;font:12px ui-monospace,monospace;color:var(--muted);
-  background:var(--surface-strong);border:1px solid var(--border);border-radius:999px;padding:6px 12px 6px 10px}}
+  background:var(--surface-strong);border:1px solid var(--border);border-radius:999px;padding:6px 12px 6px 10px;
+  transition:background-color .4s ease}}
 .live-dot{{width:7px;height:7px;border-radius:50%;background:var(--mint)}}
 .live.offline .live-dot{{background:var(--coral)}}
+.live.flash{{background:rgba(28,134,196,.16)}}
 .local{{font:11px ui-monospace,monospace;color:var(--muted);border:1px solid var(--border);background:var(--surface-strong);
   border-radius:999px;padding:6px 12px;white-space:nowrap}}
 .summary.glass{{display:flex;gap:30px;padding:16px 24px;margin-bottom:18px;flex-wrap:wrap}}
@@ -234,6 +281,24 @@ td:nth-child(2),td:nth-child(3),td:nth-child(4){{font-size:13px;color:var(--mute
 .status.parked{{color:#8a5c0e;background:rgba(169,120,15,.14)}}
 .status.open{{color:var(--aqua-deep);background:rgba(28,134,196,.12)}}
 .status.abandoned{{color:#8a2f3f;background:rgba(199,90,108,.14)}}
+.status.open::before{{content:"";display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;
+  background:var(--aqua-deep);animation:status-pulse 1.6s ease-in-out infinite}}
+@keyframes status-pulse{{0%,100%{{opacity:1}}50%{{opacity:.35}}}}
+.columns{{display:grid;grid-template-columns:1.6fr 1fr;gap:20px;align-items:start}}
+.activity-panel{{padding-bottom:12px}}
+.activity-list{{list-style:none;margin:0;padding:4px 4px 8px}}
+.activity-item{{display:flex;gap:10px;padding:9px 6px;border-bottom:1px solid var(--line);font-size:13px}}
+.activity-item:last-child{{border-bottom:none}}
+.activity-item.kind-start .activity-dot{{background:var(--aqua-deep)}}
+.activity-item.kind-note .activity-dot{{background:var(--muted)}}
+.activity-item.kind-end .activity-dot{{background:var(--mint)}}
+.activity-dot{{flex:none;width:7px;height:7px;margin-top:6px;border-radius:50%}}
+.activity-label{{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;font-weight:700}}
+.activity-link{{display:block;color:var(--ink);text-decoration:none;overflow-wrap:anywhere}}
+.activity-link:hover{{color:var(--aqua-deep)}}
+.activity-item time{{display:block;font:11px ui-monospace,monospace;color:var(--muted);margin-top:2px}}
+.activity-item.is-new{{animation:activity-in .6s ease}}
+@keyframes activity-in{{0%{{background:rgba(28,134,196,.14)}}100%{{background:transparent}}}}
 .detail.glass{{margin-top:26px;padding:24px 26px}}
 .detail-head{{display:flex;justify-content:space-between;align-items:flex-end}}
 .eyebrow{{font-size:10px;letter-spacing:.12em;color:var(--aqua-deep);font-weight:700;margin:0 0 6px}}
@@ -249,6 +314,7 @@ ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}
 .table-wrap{{padding-bottom:6px}}
 @media(max-width:700px){{main{{padding:25px 16px 48px}}header.glass{{align-items:flex-start;flex-direction:column}}
   .table-wrap{{overflow-x:auto}}table{{min-width:660px}}.summary.glass{{gap:18px}}}}
+@media(max-width:860px){{.columns{{grid-template-columns:1fr}}}}
 </style></head><body><main>
 <header class=glass><div><p class=brand>ClearStack / local run log</p><h1>Runs</h1></div>
 <div class=head-right><span class=live id=live><span class=live-dot></span><span id=live-label>live</span></span>
@@ -258,7 +324,10 @@ ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}
 <div class=metric><strong>{counts['parked']}</strong><span>parked</span></div>
 {f'<div class=metric><strong>${total_cost:.2f}</strong><span>total cost</span></div>' if has_telemetry else ''}</div>
 {"" if has_telemetry else '<div class="telemetry glass"><strong>Token and tool telemetry is not collected yet.</strong> No run in this log has it. Open a run detail to check once one does. Totals are not shown as zero.</div>'}
-{error_html}<section class="panel glass"><div class=section-title><h2>Recent runs</h2><span class=count>newest first</span></div>{table}</section>
+{error_html}<div class=columns>
+<section class="panel glass"><div class=section-title><h2>Recent runs</h2><span class=count>newest first</span></div>{table}</section>
+<section class="panel glass activity-panel"><div class=section-title><h2>Activity</h2><span class=count>live feed</span></div>{_activity_feed(runs)}</section>
+</div>
 {detail_html}{missing}</main>
 <script>
 (function(){{
@@ -287,8 +356,17 @@ ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}
       if (nextMain && curMain && nextMain.innerHTML !== curMain.innerHTML) {{
         curMain.innerHTML = nextMain.innerHTML;
         tickDurations();
+        var first = curMain.querySelector(".activity-item");
+        if (first) {{
+          first.classList.add("is-new");
+          setTimeout(function(){{ first.classList.remove("is-new"); }}, 650);
+        }}
       }}
     }}).catch(function(){{}});
+  }};
+  var flashLive = function(){{
+    liveEl.classList.add("flash");
+    setTimeout(function(){{ liveEl.classList.remove("flash"); }}, 500);
   }};
   setInterval(tickDurations, 1000);
   if (typeof EventSource === "undefined") {{
@@ -297,7 +375,7 @@ ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}
     return;
   }}
   var es = new EventSource("/events");
-  es.addEventListener("update", refresh);
+  es.addEventListener("update", function(){{ flashLive(); refresh(); }});
   es.onopen = function(){{ liveEl.classList.remove("offline"); liveLabel.textContent = "live"; }};
   es.onerror = function(){{ liveEl.classList.add("offline"); liveLabel.textContent = "reconnecting"; }};
 }})();

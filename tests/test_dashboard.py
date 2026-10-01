@@ -100,6 +100,27 @@ class DashboardTest(unittest.TestCase):
         self.assertIn('data-started="2026-10-01T10:00:00+00:00"', page)
         self.assertIn('data-status="open"', page)
 
+    def test_activity_feed_shows_events_newest_first_across_runs(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "a", "task": "task a", "agent": "hermes"},
+            {"ts": "2026-10-01T10:05:00+00:00", "event": "start", "run": "b", "task": "task b", "agent": "codex"},
+            {"ts": "2026-10-01T10:06:00+00:00", "event": "note", "run": "a", "text": "found the bug"},
+            {"ts": "2026-10-01T10:10:00+00:00", "event": "end", "run": "b", "status": "done", "verified": [], "unverified": []},
+        )
+
+        page = render_page(load_runs(self.log))
+
+        idx_end = page.index("task b — done")
+        idx_note = page.index("found the bug")
+        idx_start_a = page.index("task a", idx_note)
+        self.assertLess(idx_end, idx_note)
+        self.assertLess(idx_note, idx_start_a)
+        self.assertIn("activity-list", page)
+
+    def test_activity_feed_has_empty_state_with_no_runs(self):
+        page = render_page(load_runs(self.log))
+        self.assertIn("No activity yet", page)
+
 
 class SSETest(unittest.TestCase):
     def test_events_endpoint_pushes_update_when_the_log_file_changes(self):
