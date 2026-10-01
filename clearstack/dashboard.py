@@ -129,7 +129,7 @@ def _detail(run):
       <dl class=metadata>
         <div><dt>Agent</dt><dd>{escape(str(start.get('agent') or 'Unknown'))}</dd></div>
         <div><dt>Started</dt><dd>{escape(_display_time(run['started_at']))}</dd></div>
-        <div><dt>Duration</dt><dd>{escape(_duration(run))}</dd></div>
+        <div><dt>Duration</dt><dd data-duration data-started="{escape(str(run['started_at']), quote=True)}" data-status="{escape(str(run['status']), quote=True)}">{escape(_duration(run))}</dd></div>
         <div><dt>Status</dt><dd>{escape(str(run['status']))}</dd></div>
         <div><dt>Branch</dt><dd>{escape(str(start.get('branch') or '—'))}</dd></div>
         <div><dt>Commit</dt><dd><code>{escape(str(start.get('head') or '—'))}</code></dd></div>
@@ -177,7 +177,7 @@ def render_page(runs, selected_id=None, error=None, bind_host="127.0.0.1"):
         rows.append(f"""<tr>
           <td><a class=run-link href="/?run={run_id}#detail">{task}<small>{run_id}</small></a></td>
           <td>{agent}</td><td>{escape(_display_time(run['started_at']))}</td>
-          <td>{escape(_duration(run))}</td><td><span class="status {status}">{status}</span></td>
+          <td data-duration data-started="{escape(str(run['started_at']), quote=True)}" data-status="{status}">{escape(_duration(run))}</td><td><span class="status {status}">{status}</span></td>
           <td>{_format_cost_cell(run)}</td>
         </tr>""")
     if rows:
@@ -194,55 +194,47 @@ def render_page(runs, selected_id=None, error=None, bind_host="127.0.0.1"):
 <title>ClearStack runs</title>
 <style>
 :root{{
-  --sky-top:#eaf6ff;--sky-mid:#d3ecfb;--sky-bottom:#bfe3fb;
-  --glass:rgba(255,255,255,.58);--glass-strong:rgba(255,255,255,.78);--glass-border:rgba(255,255,255,.9);
-  --ink:#143450;--muted:#5c7b93;--line:rgba(20,52,80,.14);
-  --aqua:#1c9ad6;--aqua-deep:#0e6fa8;--mint:#2bc98f;--coral:#e8637a;--amber:#c98a1d;
-  --shadow:0 1px 1px rgba(14,70,110,.06),0 10px 28px -14px rgba(14,70,110,.35);
+  --paper:#f3f5f7;--surface:rgba(255,255,255,.72);--surface-strong:rgba(255,255,255,.88);--border:rgba(20,52,80,.10);
+  --ink:#1c2b3a;--muted:#637587;--line:rgba(20,52,80,.10);
+  --aqua:#1c86c4;--aqua-deep:#0f5f8f;--mint:#2b9c71;--coral:#c75a6c;--amber:#a9780f;
+  --shadow:0 1px 2px rgba(20,52,80,.04),0 6px 18px -12px rgba(20,52,80,.18);
 }}
 *{{box-sizing:border-box}}
 body{{margin:0;min-height:100vh;color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;
-  background:
-    radial-gradient(1100px 460px at 18% -10%,rgba(255,255,255,.9),rgba(255,255,255,0) 60%),
-    linear-gradient(180deg,var(--sky-top),var(--sky-mid) 45%,var(--sky-bottom));
-  background-attachment:fixed}}
+  background:linear-gradient(180deg,var(--paper),#e7edf1 60%);background-attachment:fixed}}
 main{{max-width:1100px;margin:0 auto;padding:44px 28px 72px}}
-.glass{{background:var(--glass);backdrop-filter:blur(14px) saturate(160%);-webkit-backdrop-filter:blur(14px) saturate(160%);
-  border:1px solid var(--glass-border);border-radius:18px;box-shadow:var(--shadow);position:relative;overflow:hidden}}
-.glass::before{{content:"";position:absolute;inset:0 0 auto 0;height:46%;
-  background:linear-gradient(180deg,rgba(255,255,255,.85),rgba(255,255,255,0));pointer-events:none}}
-header.glass{{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:22px 28px;margin-bottom:26px}}
-h1{{font-size:clamp(28px,4.4vw,42px);line-height:1;margin:0;letter-spacing:-.03em;
-  background:linear-gradient(180deg,var(--aqua-deep),var(--ink));-webkit-background-clip:text;background-clip:text;color:transparent}}
-.brand{{color:var(--aqua-deep);font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;margin:0 0 8px}}
-.head-right{{display:flex;align-items:center;gap:12px}}
+.glass{{background:var(--surface);backdrop-filter:blur(7px) saturate(115%);-webkit-backdrop-filter:blur(7px) saturate(115%);
+  border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow)}}
+header.glass{{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:20px 26px;margin-bottom:24px}}
+h1{{font-size:clamp(26px,4vw,38px);line-height:1;margin:0;letter-spacing:-.03em;color:var(--ink)}}
+.brand{{color:var(--aqua-deep);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin:0 0 8px}}
+.head-right{{display:flex;align-items:center;gap:10px}}
 .live{{display:flex;align-items:center;gap:7px;font:12px ui-monospace,monospace;color:var(--muted);
-  background:var(--glass-strong);border:1px solid var(--glass-border);border-radius:999px;padding:7px 13px 7px 11px}}
-.live-dot{{width:8px;height:8px;border-radius:50%;background:var(--mint);box-shadow:0 0 0 0 rgba(43,201,143,.6);animation:pulse 2s infinite}}
-.live.offline .live-dot{{background:var(--coral);animation:none;box-shadow:none}}
-@keyframes pulse{{0%{{box-shadow:0 0 0 0 rgba(43,201,143,.55)}}70%{{box-shadow:0 0 0 9px rgba(43,201,143,0)}}100%{{box-shadow:0 0 0 0 rgba(43,201,143,0)}}}}
-.local{{font:11px ui-monospace,monospace;color:var(--muted);border:1px solid var(--glass-border);background:var(--glass-strong);
-  border-radius:999px;padding:7px 13px;white-space:nowrap}}
-.summary.glass{{display:flex;gap:30px;padding:18px 26px;margin-bottom:20px;flex-wrap:wrap}}
-.metric{{display:flex;align-items:baseline;gap:9px}}.metric strong{{font:700 22px ui-monospace,monospace;color:var(--aqua-deep)}}
+  background:var(--surface-strong);border:1px solid var(--border);border-radius:999px;padding:6px 12px 6px 10px}}
+.live-dot{{width:7px;height:7px;border-radius:50%;background:var(--mint)}}
+.live.offline .live-dot{{background:var(--coral)}}
+.local{{font:11px ui-monospace,monospace;color:var(--muted);border:1px solid var(--border);background:var(--surface-strong);
+  border-radius:999px;padding:6px 12px;white-space:nowrap}}
+.summary.glass{{display:flex;gap:30px;padding:16px 24px;margin-bottom:18px;flex-wrap:wrap}}
+.metric{{display:flex;align-items:baseline;gap:9px}}.metric strong{{font:700 21px ui-monospace,monospace;color:var(--aqua-deep)}}
 .metric span{{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}}
-.telemetry.glass{{margin:0 0 20px;padding:14px 20px;border-left:4px solid var(--aqua);font-size:13px}}.telemetry strong{{font-weight:650}}
+.telemetry.glass{{margin:0 0 18px;padding:13px 18px;border-left:3px solid var(--aqua);font-size:13px}}.telemetry strong{{font-weight:650}}
 .section-title{{display:flex;justify-content:space-between;align-items:baseline;margin:0 0 12px}}
-h2{{font-size:19px;margin:0;letter-spacing:-.02em;color:var(--ink)}}.count{{font:11px ui-monospace,monospace;color:var(--muted)}}
+h2{{font-size:18px;margin:0;letter-spacing:-.02em;color:var(--ink)}}.count{{font:11px ui-monospace,monospace;color:var(--muted)}}
 .panel.glass{{padding:8px 10px 2px}}
 table{{width:100%;border-collapse:collapse;text-align:left}}
 th{{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:700;padding:12px 14px;border-bottom:1px solid var(--line)}}
 td{{padding:13px 14px;border-bottom:1px solid var(--line);vertical-align:top}}
-tbody tr:hover{{background:rgba(28,154,214,.08)}}
+tbody tr:hover{{background:rgba(28,134,196,.05)}}
 .run-link{{color:var(--ink);text-decoration:none;font-weight:600}}.run-link:hover{{color:var(--aqua-deep)}}
 small{{display:block;font:11px ui-monospace,monospace;color:var(--muted);font-weight:400;margin-top:2px}}
 td:nth-child(2),td:nth-child(3),td:nth-child(4){{font-size:13px;color:var(--muted)}}
 .status{{font-size:11px;text-transform:capitalize;font-weight:600;padding:3px 10px;border-radius:999px}}
-.status.done{{color:#0a6b47;background:rgba(43,201,143,.18)}}
-.status.parked{{color:#8a5c0e;background:rgba(201,138,29,.18)}}
-.status.open{{color:var(--aqua-deep);background:rgba(28,154,214,.16)}}
-.status.abandoned{{color:#8a2f3f;background:rgba(232,99,122,.16)}}
-.detail.glass{{margin-top:28px;padding:26px 28px}}
+.status.done{{color:#0a6b47;background:rgba(43,156,113,.14)}}
+.status.parked{{color:#8a5c0e;background:rgba(169,120,15,.14)}}
+.status.open{{color:var(--aqua-deep);background:rgba(28,134,196,.12)}}
+.status.abandoned{{color:#8a2f3f;background:rgba(199,90,108,.14)}}
+.detail.glass{{margin-top:26px;padding:24px 26px}}
 .detail-head{{display:flex;justify-content:space-between;align-items:flex-end}}
 .eyebrow{{font-size:10px;letter-spacing:.12em;color:var(--aqua-deep);font-weight:700;margin:0 0 6px}}
 .back{{font-size:13px;color:var(--aqua-deep);text-decoration:none;font-weight:600}}.back:hover{{text-decoration:underline}}
@@ -253,7 +245,7 @@ dt{{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.0
 code{{font:12px ui-monospace,monospace}}.detail section{{margin:20px 0}}.detail h3{{font-size:14px;margin:0 0 6px;color:var(--aqua-deep)}}
 ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}
 .muted,.empty{{color:var(--muted)}}.empty{{padding:25px 0}}
-.error{{color:#8c243d;background:rgba(232,99,122,.16);padding:12px;border-radius:10px}}
+.error{{color:#8c243d;background:rgba(199,90,108,.14);padding:12px;border-radius:10px}}
 .table-wrap{{padding-bottom:6px}}
 @media(max-width:700px){{main{{padding:25px 16px 48px}}header.glass{{align-items:flex-start;flex-direction:column}}
   .table-wrap{{overflow-x:auto}}table{{min-width:660px}}.summary.glass{{gap:18px}}}}
@@ -272,6 +264,21 @@ ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}
 (function(){{
   var liveEl = document.getElementById("live");
   var liveLabel = document.getElementById("live-label");
+  var formatDuration = function(seconds){{
+    seconds = Math.max(0, Math.floor(seconds));
+    var h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60;
+    if (h) return h + "h " + String(m).padStart(2, "0") + "m";
+    if (m) return m + "m " + String(s).padStart(2, "0") + "s";
+    return s + "s";
+  }};
+  var tickDurations = function(){{
+    document.querySelectorAll("[data-duration]").forEach(function(el){{
+      if (el.dataset.status !== "open" || !el.dataset.started) return;
+      var started = new Date(el.dataset.started).getTime();
+      if (isNaN(started)) return;
+      el.textContent = formatDuration((Date.now() - started) / 1000);
+    }});
+  }};
   var refresh = function(){{
     fetch(location.href, {{cache: "no-store"}}).then(function(r){{ return r.text(); }}).then(function(html){{
       var next = new DOMParser().parseFromString(html, "text/html");
@@ -279,9 +286,11 @@ ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}
       var curMain = document.querySelector("main");
       if (nextMain && curMain && nextMain.innerHTML !== curMain.innerHTML) {{
         curMain.innerHTML = nextMain.innerHTML;
+        tickDurations();
       }}
     }}).catch(function(){{}});
   }};
+  setInterval(tickDurations, 1000);
   if (typeof EventSource === "undefined") {{
     liveLabel.textContent = "polling";
     setInterval(refresh, 4000);

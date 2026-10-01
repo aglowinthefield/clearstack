@@ -89,6 +89,17 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("new EventSource(\"/events\")", page)
         self.assertIn("</script>", page)
 
+    def test_open_run_duration_cell_carries_data_for_client_side_ticking(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "open1", "task": "still going", "agent": "hermes"},
+        )
+
+        page = render_page(load_runs(self.log))
+
+        self.assertIn("data-duration", page)
+        self.assertIn('data-started="2026-10-01T10:00:00+00:00"', page)
+        self.assertIn('data-status="open"', page)
+
 
 class SSETest(unittest.TestCase):
     def test_events_endpoint_pushes_update_when_the_log_file_changes(self):
