@@ -46,6 +46,7 @@ def _claude_code_telemetry(session_id):
     tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
     cost = None
     tool_calls = 0
+    tool_breakdown = {}
     try:
         with matches[0].open(encoding="utf-8") as f:
             for line in f:
@@ -64,12 +65,17 @@ def _claude_code_telemetry(session_id):
                 elif event.get("type") == "assistant":
                     content = (event.get("message") or {}).get("content")
                     if isinstance(content, list):
-                        tool_calls += sum(1 for c in content if isinstance(c, dict) and c.get("type") == "tool_use")
+                        for c in content:
+                            if isinstance(c, dict) and c.get("type") == "tool_use":
+                                tool_calls += 1
+                                name = c.get("name") or "unknown"
+                                tool_breakdown[name] = tool_breakdown.get(name, 0) + 1
     except OSError:
         return None
     if cost is None:
         return None
-    return {"source": "claude-code", "tokens": tokens, "cost_usd": round(cost, 4), "tool_calls": tool_calls}
+    return {"source": "claude-code", "tokens": tokens, "cost_usd": round(cost, 4),
+            "tool_calls": tool_calls, "tool_breakdown": tool_breakdown}
 
 
 def _codex_telemetry(thread_id):
@@ -80,6 +86,7 @@ def _codex_telemetry(thread_id):
         return None
     usage = None
     tool_calls = 0
+    tool_breakdown = {}
     try:
         with matches[0].open(encoding="utf-8") as f:
             for line in f:
@@ -94,8 +101,11 @@ def _codex_telemetry(thread_id):
                         if info:
                             usage = info
                 elif event.get("type") == "response_item":
-                    if (event.get("payload") or {}).get("type") == "function_call":
+                    payload = event.get("payload") or {}
+                    if payload.get("type") == "function_call":
                         tool_calls += 1
+                        name = payload.get("name") or "unknown"
+                        tool_breakdown[name] = tool_breakdown.get(name, 0) + 1
     except OSError:
         return None
     if usage is None:
@@ -110,6 +120,7 @@ def _codex_telemetry(thread_id):
         },
         "cost_usd": None,
         "tool_calls": tool_calls,
+        "tool_breakdown": tool_breakdown,
     }
 
 
@@ -136,6 +147,10 @@ def _hermes_telemetry(session_id):
         return None
     if "input_tokens" not in data:
         return None
+    tool_breakdown = {}
+    for call in data.get("tool_calls") or []:
+        name = (call.get("name") if isinstance(call, dict) else None) or "unknown"
+        tool_breakdown[name] = tool_breakdown.get(name, 0) + 1
     return {
         "source": "hermes",
         "tokens": {
@@ -146,6 +161,7 @@ def _hermes_telemetry(session_id):
         },
         "cost_usd": data.get("estimated_cost"),
         "tool_calls": len(data.get("tool_calls") or []),
+        "tool_breakdown": tool_breakdown,
     }
 
 

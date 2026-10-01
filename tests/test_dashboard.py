@@ -83,6 +83,58 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("$1.2345", detail)
         self.assertIn("7", detail)
 
+    def test_detail_shows_a_tool_mix_donut_when_telemetry_has_a_breakdown(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "r1", "task": "run", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "end", "run": "r1", "status": "done",
+             "verified": [], "unverified": [],
+             "telemetry": {"source": "hermes", "tokens": {}, "cost_usd": 0.5, "tool_calls": 5,
+                           "tool_breakdown": {"search_files": 3, "terminal": 2}}},
+        )
+
+        detail = render_page(load_runs(self.log), selected_id="r1")
+
+        self.assertIn("<div class=donut-chart", detail)
+        self.assertIn("conic-gradient", detail)
+        self.assertIn("search_files", detail)
+        self.assertIn("terminal", detail)
+
+    def test_detail_has_no_donut_when_telemetry_lacks_a_breakdown(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "r1", "task": "run", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "end", "run": "r1", "status": "done",
+             "verified": [], "unverified": [],
+             "telemetry": {"source": "hermes", "tokens": {}, "cost_usd": 0.5, "tool_calls": 0}},
+        )
+
+        detail = render_page(load_runs(self.log), selected_id="r1")
+        self.assertNotIn("<div class=donut-chart", detail)
+
+    def test_main_page_shows_aggregate_tool_mix_donut_across_runs(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "a", "task": "a", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "end", "run": "a", "status": "done",
+             "verified": [], "unverified": [],
+             "telemetry": {"source": "hermes", "tokens": {}, "cost_usd": 0.1, "tool_calls": 2,
+                           "tool_breakdown": {"shell": 2}}},
+            {"ts": "2026-10-01T10:02:00+00:00", "event": "start", "run": "b", "task": "b", "agent": "hermes"},
+            {"ts": "2026-10-01T10:03:00+00:00", "event": "end", "run": "b", "status": "done",
+             "verified": [], "unverified": [],
+             "telemetry": {"source": "hermes", "tokens": {}, "cost_usd": 0.1, "tool_calls": 1,
+                           "tool_breakdown": {"shell": 1}}},
+        )
+
+        page = render_page(load_runs(self.log))
+
+        self.assertIn("Tool mix", page)
+        self.assertIn("<div class=donut-chart", page)
+        self.assertIn(">shell<", page)
+        self.assertIn("3 · 100%", page)
+
+    def test_main_page_omits_tool_mix_donut_without_telemetry(self):
+        page = render_page(load_runs(self.log))
+        self.assertNotIn("Tool mix", page)
+
 
     def test_page_includes_an_eventsource_script_for_realtime_updates(self):
         page = render_page(load_runs(self.log))

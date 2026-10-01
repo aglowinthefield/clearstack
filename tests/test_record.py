@@ -94,6 +94,8 @@ class TelemetryTest(unittest.TestCase):
             transcript = project_dir / f"{session_id}.jsonl"
             transcript.write_text("\n".join(json.dumps(e) for e in [
                 {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash"}]}},
+                {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash"}]}},
+                {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read"}]}},
                 {"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}},
                 {"type": "cost-state", "totalCostUSD": 1.5,
                  "modelUsage": {"m": {"inputTokens": 10, "outputTokens": 5,
@@ -103,8 +105,9 @@ class TelemetryTest(unittest.TestCase):
                 result = record_module._claude_code_telemetry(session_id)
             self.assertEqual(result["source"], "claude-code")
             self.assertEqual(result["cost_usd"], 1.5)
-            self.assertEqual(result["tool_calls"], 1)
+            self.assertEqual(result["tool_calls"], 3)
             self.assertEqual(result["tokens"], {"input": 10, "output": 5, "cache_read": 2, "cache_write": 1})
+            self.assertEqual(result["tool_breakdown"], {"Bash": 2, "Read": 1})
 
     def test_claude_code_missing_transcript_returns_none(self):
         with tempfile.TemporaryDirectory() as home:
@@ -119,18 +122,44 @@ class TelemetryTest(unittest.TestCase):
             (sessions / f"{session_id}.json").write_text(json.dumps({
                 "input_tokens": 100, "output_tokens": 20,
                 "cache_read_tokens": 5, "cache_write_tokens": 3,
-                "estimated_cost": 0.02, "tool_calls": [{}, {}],
+                "estimated_cost": 0.02, "tool_calls": [{"name": "search_files"}, {"name": "search_files"}, {"name": "terminal"}],
             }))
             with patch.object(record_module.Path, "home", return_value=Path(home)):
                 result = record_module._hermes_telemetry(session_id)
             self.assertEqual(result["source"], "hermes")
-            self.assertEqual(result["tool_calls"], 2)
+            self.assertEqual(result["tool_calls"], 3)
             self.assertEqual(result["cost_usd"], 0.02)
+            self.assertEqual(result["tool_breakdown"], {"search_files": 2, "terminal": 1})
 
     def test_hermes_missing_session_file_returns_none(self):
         with tempfile.TemporaryDirectory() as home:
             with patch.object(record_module.Path, "home", return_value=Path(home)):
                 self.assertIsNone(record_module._hermes_telemetry("missing"))
+
+    def test_codex_reads_token_count_and_function_call_breakdown(self):
+        with tempfile.TemporaryDirectory() as home:
+            thread_id = "01a095fe-abc"
+            sessions = Path(home) / ".codex" / "sessions" / "2026" / "09" / "12"
+            sessions.mkdir(parents=True)
+            rollout = sessions / f"rollout-2026-09-12T10-21-08-{thread_id}.jsonl"
+            rollout.write_text("\n".join(json.dumps(e) for e in [
+                {"type": "event_msg", "payload": {"type": "token_count",
+                 "info": {"total_token_usage": {"input_tokens": 50, "output_tokens": 10,
+                                                  "cached_input_tokens": 5, "cache_write_input_tokens": 2}}}},
+                {"type": "response_item", "payload": {"type": "function_call", "name": "shell"}},
+                {"type": "response_item", "payload": {"type": "function_call", "name": "shell"}},
+                {"type": "response_item", "payload": {"type": "function_call", "name": "apply_patch"}},
+            ]) + "\n")
+            with patch.object(record_module.Path, "home", return_value=Path(home)):
+                result = record_module._codex_telemetry(thread_id)
+            self.assertEqual(result["source"], "codex")
+            self.assertEqual(result["tool_calls"], 3)
+            self.assertEqual(result["tool_breakdown"], {"shell": 2, "apply_patch": 1})
+
+    def test_codex_missing_rollout_returns_none(self):
+        with tempfile.TemporaryDirectory() as home:
+            with patch.object(record_module.Path, "home", return_value=Path(home)):
+                self.assertIsNone(record_module._codex_telemetry("no-such-thread"))
 
     def test_telemetry_prefers_claude_code_session_when_set(self):
         with patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "s1"}, clear=False), \

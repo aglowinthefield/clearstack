@@ -100,6 +100,63 @@ def _format_tokens(n):
     return f"{n:,}" if isinstance(n, (int, float)) else "—"
 
 
+_DONUT_COLORS = (
+    "#139ad6", "#1fae6e", "#d99412", "#e0556e", "#7b5fe0", "#2bb8b0", "#c25fd1", "#5b8fd6",
+)
+
+
+def _donut_section(title, breakdown, limit=8):
+    """A CSS conic-gradient donut plus a legend, for a name->count breakdown.
+
+    Returns "" when there is nothing to chart, so callers can splice it in
+    unconditionally. The top `limit` names are shown individually; the rest
+    collapse into one "other" slice so the chart stays readable.
+    """
+    total = sum(breakdown.values())
+    if not total:
+        return ""
+    items = sorted(breakdown.items(), key=lambda kv: kv[1], reverse=True)
+    top, rest = items[:limit], items[limit:]
+    if rest:
+        top.append(("other", sum(n for _, n in rest)))
+    stops = []
+    legend = []
+    angle = 0.0
+    for i, (name, count) in enumerate(top):
+        color = _DONUT_COLORS[i % len(_DONUT_COLORS)]
+        pct = count / total * 100
+        next_angle = angle + pct
+        stops.append(f"{color} {angle:.2f}% {next_angle:.2f}%")
+        angle = next_angle
+        legend.append(
+            f'<li><span class=donut-swatch style="background:{color}"></span>'
+            f'{escape(str(name))}<span class=donut-count>{count} · {pct:.0f}%</span></li>'
+        )
+    gradient = ", ".join(stops)
+    heading = f"<h3>{escape(title)}</h3>" if title else ""
+    return f"""<div class=donut-wrap>
+      {heading}
+      <div class=donut-body>
+        <div class=donut-chart style="background:conic-gradient({gradient})">
+          <div class=donut-hole><strong>{total}</strong><span>calls</span></div>
+        </div>
+        <ul class=donut-legend>{''.join(legend)}</ul>
+      </div>
+    </div>"""
+
+
+def _aggregate_tool_breakdown(runs):
+    """Sum tool_breakdown across every run that has telemetry."""
+    totals = {}
+    for run in runs:
+        telemetry = (run["end"] or {}).get("telemetry") if run["end"] else None
+        if not telemetry:
+            continue
+        for name, count in (telemetry.get("tool_breakdown") or {}).items():
+            totals[name] = totals.get(name, 0) + count
+    return totals
+
+
 def _telemetry_section(end):
     telemetry = end.get("telemetry") if end else None
     if not telemetry:
@@ -114,7 +171,9 @@ def _telemetry_section(end):
       <dl class=metadata>{rows}
         <div><dt>Tool calls</dt><dd>{_format_tokens(telemetry.get('tool_calls'))}</dd></div>
         <div><dt>Cost</dt><dd>{escape(cost_text)}</dd></div>
-      </dl></section>"""
+      </dl>
+      {_donut_section('Tool calls by type', telemetry.get('tool_breakdown') or {})}
+    </section>"""
 
 
 def _detail(run, runs_by_id):
@@ -366,6 +425,19 @@ h1{{font-size:clamp(26px,4vw,38px);line-height:1;margin:0;letter-spacing:-.03em;
 .mix-amber{{background:linear-gradient(90deg,#ffcf5c,var(--amber))}}
 .mix-coral{{background:linear-gradient(90deg,#ff8a9c,var(--coral))}}
 .telemetry.glass{{margin:0 0 18px;padding:13px 18px;border-left:4px solid var(--aqua);font-size:13px}}.telemetry strong{{font-weight:650}}
+.donut-wrap h3{{font-size:14px;margin:0 0 10px;color:var(--aqua-deep)}}
+.donut-body{{display:flex;align-items:center;gap:16px;flex-wrap:wrap}}
+.donut-chart{{position:relative;flex:none;width:96px;height:96px;border-radius:50%;
+  box-shadow:0 2px 6px rgba(9,56,97,.25),inset 0 1px 0 rgba(255,255,255,.4)}}
+.donut-hole{{position:absolute;inset:18px;border-radius:50%;background:var(--surface-strong);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.9)}}
+.donut-hole strong{{font:800 16px ui-monospace,monospace;color:var(--ink)}}
+.donut-hole span{{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}}
+.donut-legend{{list-style:none;margin:0;padding:0;flex:1;min-width:140px;font-size:12px}}
+.donut-legend li{{display:flex;align-items:center;gap:7px;padding:3px 0;color:var(--ink)}}
+.donut-swatch{{flex:none;width:9px;height:9px;border-radius:3px}}
+.donut-count{{margin-left:auto;color:var(--muted);font:11px ui-monospace,monospace;white-space:nowrap}}
 .section-title{{display:flex;justify-content:space-between;align-items:baseline;margin:0 0 12px}}
 h2{{font-size:18px;margin:0;letter-spacing:-.02em;color:var(--ink)}}.count{{font:11px ui-monospace,monospace;color:var(--muted)}}
 .panel.glass{{padding:8px 10px 2px}}
@@ -387,6 +459,7 @@ td:nth-child(4),td:nth-child(5){{white-space:nowrap}}
   background:var(--aqua-deep);animation:status-pulse 1.6s ease-in-out infinite}}
 @keyframes status-pulse{{0%,100%{{opacity:1}}50%{{opacity:.35}}}}
 .columns{{display:grid;grid-template-columns:2.1fr 1fr;gap:20px;align-items:start}}
+.side-column{{display:flex;flex-direction:column;gap:20px}}
 .activity-panel{{padding-bottom:12px}}
 .activity-list{{list-style:none;margin:0;padding:4px 4px 8px}}
 .activity-item{{display:flex;gap:10px;padding:9px 6px;border-bottom:1px solid var(--line);font-size:13px}}
@@ -436,7 +509,10 @@ ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}
 {"" if has_telemetry else '<div class="telemetry glass"><strong>Token and tool telemetry is not collected yet.</strong> No run in this log has it. Open a run detail to check once one does. Totals are not shown as zero.</div>'}
 {error_html}<div class=columns>
 <section class="panel glass"><div class=section-title><h2>Recent runs</h2><span class=count>newest first</span></div>{table}</section>
+<div class=side-column>
 <section class="panel glass activity-panel"><div class=section-title><h2>Activity</h2><span class=count>live feed</span></div>{_activity_feed(runs)}</section>
+{f'<section class="panel glass donut-panel"><div class=section-title><h2>Tool mix</h2><span class=count>across all runs</span></div>{_donut_section("", _aggregate_tool_breakdown(runs))}</section>' if has_telemetry else ''}
+</div>
 </div>
 {detail_html}{missing}</main>
 <script>
