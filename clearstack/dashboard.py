@@ -164,11 +164,13 @@ def _telemetry_section(end):
     tokens = telemetry.get("tokens") or {}
     cost = telemetry.get("cost_usd")
     cost_text = f"${cost:.4f}" if isinstance(cost, (int, float)) else "—"
+    model = telemetry.get("model")
+    model_row = f"<div><dt>Model</dt><dd>{escape(str(model))}</dd></div>" if model else ""
     rows = "".join(f"""<div><dt>{escape(label)}</dt><dd>{_format_tokens(tokens.get(key, 0))}</dd></div>"""
                     for label, key in (("Input", "input"), ("Output", "output"),
                                         ("Cache read", "cache_read"), ("Cache write", "cache_write")))
     return f"""<section><h3>Telemetry · {escape(str(telemetry.get('source') or 'unknown'))}</h3>
-      <dl class=metadata>{rows}
+      <dl class=metadata>{model_row}{rows}
         <div><dt>Tool calls</dt><dd>{_format_tokens(telemetry.get('tool_calls'))}</dd></div>
         <div><dt>Cost</dt><dd>{escape(cost_text)}</dd></div>
       </dl>

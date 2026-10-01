@@ -38,13 +38,14 @@ def git_state():
 
 
 def _claude_code_telemetry(session_id):
-    """Read token, cost, and tool-call totals from a Claude Code transcript."""
+    """Read token, cost, model, and tool-call totals from a Claude Code transcript."""
     base = Path.home() / ".claude" / "projects"
     matches = list(base.glob(f"*/{session_id}.jsonl")) if base.is_dir() else []
     if not matches:
         return None
     tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
     cost = None
+    model = None
     tool_calls = 0
     tool_breakdown = {}
     try:
@@ -57,7 +58,11 @@ def _claude_code_telemetry(session_id):
                 if event.get("type") == "cost-state":
                     cost = event.get("totalCostUSD")
                     tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
-                    for usage in (event.get("modelUsage") or {}).values():
+                    model_usage = event.get("modelUsage") or {}
+                    if model_usage:
+                        model = max(model_usage.items(),
+                                    key=lambda kv: kv[1].get("inputTokens", 0) + kv[1].get("outputTokens", 0))[0]
+                    for usage in model_usage.values():
                         tokens["input"] += usage.get("inputTokens", 0)
                         tokens["output"] += usage.get("outputTokens", 0)
                         tokens["cache_read"] += usage.get("cacheReadInputTokens", 0)
@@ -74,7 +79,7 @@ def _claude_code_telemetry(session_id):
         return None
     if cost is None:
         return None
-    return {"source": "claude-code", "tokens": tokens, "cost_usd": round(cost, 4),
+    return {"source": "claude-code", "model": model, "tokens": tokens, "cost_usd": round(cost, 4),
             "tool_calls": tool_calls, "tool_breakdown": tool_breakdown}
 
 
@@ -85,6 +90,7 @@ def _codex_telemetry(thread_id):
     if not matches:
         return None
     usage = None
+    model = None
     tool_calls = 0
     tool_breakdown = {}
     try:
@@ -94,7 +100,11 @@ def _codex_telemetry(thread_id):
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if event.get("type") == "event_msg":
+                if event.get("type") == "session_meta" and model is None:
+                    base_instructions = (event.get("payload") or {}).get("base_instructions")
+                    if isinstance(base_instructions, dict):
+                        model = (base_instructions.get("provenance") or {}).get("model")
+                elif event.get("type") == "event_msg":
                     payload = event.get("payload") or {}
                     if payload.get("type") == "token_count":
                         info = (payload.get("info") or {}).get("total_token_usage")
@@ -112,6 +122,7 @@ def _codex_telemetry(thread_id):
         return None
     return {
         "source": "codex",
+        "model": model,
         "tokens": {
             "input": usage.get("input_tokens", 0),
             "output": usage.get("output_tokens", 0),
@@ -122,6 +133,10 @@ def _codex_telemetry(thread_id):
         "tool_calls": tool_calls,
         "tool_breakdown": tool_breakdown,
     }
+
+
+def _hermes_home():
+    return Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
 
 
 def _hermes_session_path(session_id):
@@ -136,8 +151,69 @@ def _hermes_session_path(session_id):
     return None
 
 
+def _hermes_telemetry_from_state_db(session_id):
+    """Read token, cost, model, and tool-call breakdown from Hermes's state.db.
+
+    This is where the desktop app and CLI actually persist sessions (a
+    ``sessions`` row plus per-tool-call ``messages`` rows), as opposed to the
+    legacy flat session JSON files under webui/profiles, which not every
+    session type writes.
+    """
+    db_path = _hermes_home() / "state.db"
+    if not db_path.is_file():
+        return None
+    import sqlite3
+    try:
+        uri = f"file:{db_path}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, timeout=5.0)
+        try:
+            conn.execute("PRAGMA busy_timeout = 5000")
+            row = conn.execute(
+                "SELECT model, tool_call_count, input_tokens, output_tokens, "
+                "cache_read_tokens, cache_write_tokens, estimated_cost_usd, actual_cost_usd "
+                "FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            model, tool_call_count, input_tokens, output_tokens, cache_read, cache_write, est_cost, act_cost = row
+            tool_breakdown = {}
+            for name, count in conn.execute(
+                "SELECT tool_name, COUNT(*) FROM messages "
+                "WHERE session_id = ? AND tool_name IS NOT NULL GROUP BY tool_name",
+                (session_id,),
+            ):
+                tool_breakdown[name or "unknown"] = count
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+    cost = act_cost if isinstance(act_cost, (int, float)) and act_cost else est_cost
+    return {
+        "source": "hermes",
+        "model": model,
+        "tokens": {
+            "input": input_tokens or 0,
+            "output": output_tokens or 0,
+            "cache_read": cache_read or 0,
+            "cache_write": cache_write or 0,
+        },
+        "cost_usd": round(cost, 4) if isinstance(cost, (int, float)) else None,
+        "tool_calls": tool_call_count or sum(tool_breakdown.values()),
+        "tool_breakdown": tool_breakdown,
+    }
+
+
 def _hermes_telemetry(session_id):
-    """Read token, cost, and tool-call totals from a Hermes session file."""
+    """Read token, cost, model, and tool-call totals for a Hermes session.
+
+    Tries the state.db first (current storage for desktop/CLI sessions), then
+    falls back to the legacy flat session JSON file some older session types
+    still use.
+    """
+    result = _hermes_telemetry_from_state_db(session_id)
+    if result:
+        return result
     path = _hermes_session_path(session_id)
     if path is None:
         return None
@@ -153,6 +229,7 @@ def _hermes_telemetry(session_id):
         tool_breakdown[name] = tool_breakdown.get(name, 0) + 1
     return {
         "source": "hermes",
+        "model": data.get("model"),
         "tokens": {
             "input": data.get("input_tokens", 0),
             "output": data.get("output_tokens", 0),

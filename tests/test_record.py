@@ -136,6 +136,50 @@ class TelemetryTest(unittest.TestCase):
             with patch.object(record_module.Path, "home", return_value=Path(home)):
                 self.assertIsNone(record_module._hermes_telemetry("missing"))
 
+    def test_hermes_reads_state_db_model_tokens_and_tool_breakdown(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as home:
+            db_path = Path(home) / "state.db"
+            conn = sqlite3.connect(str(db_path))
+            conn.execute("""CREATE TABLE sessions (
+                id TEXT PRIMARY KEY, model TEXT, tool_call_count INTEGER,
+                input_tokens INTEGER, output_tokens INTEGER,
+                cache_read_tokens INTEGER, cache_write_tokens INTEGER,
+                estimated_cost_usd REAL, actual_cost_usd REAL)""")
+            conn.execute("""CREATE TABLE messages (
+                session_id TEXT, tool_name TEXT)""")
+            conn.execute("INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?)",
+                         ("sess-1", "claude-sonnet-5", 3, 100, 20, 5, 3, 0.10, 0.12))
+            conn.executemany("INSERT INTO messages VALUES (?,?)", [
+                ("sess-1", "terminal"), ("sess-1", "terminal"), ("sess-1", "read_file"),
+            ])
+            conn.commit()
+            conn.close()
+            with patch.dict(os.environ, {"HERMES_HOME": home}):
+                result = record_module._hermes_telemetry("sess-1")
+            self.assertEqual(result["source"], "hermes")
+            self.assertEqual(result["model"], "claude-sonnet-5")
+            self.assertEqual(result["cost_usd"], 0.12)
+            self.assertEqual(result["tool_calls"], 3)
+            self.assertEqual(result["tool_breakdown"], {"terminal": 2, "read_file": 1})
+
+    def test_hermes_state_db_without_matching_session_falls_back_to_none(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as home:
+            db_path = Path(home) / "state.db"
+            conn = sqlite3.connect(str(db_path))
+            conn.execute("""CREATE TABLE sessions (
+                id TEXT PRIMARY KEY, model TEXT, tool_call_count INTEGER,
+                input_tokens INTEGER, output_tokens INTEGER,
+                cache_read_tokens INTEGER, cache_write_tokens INTEGER,
+                estimated_cost_usd REAL, actual_cost_usd REAL)""")
+            conn.execute("CREATE TABLE messages (session_id TEXT, tool_name TEXT)")
+            conn.commit()
+            conn.close()
+            with patch.dict(os.environ, {"HERMES_HOME": home}), \
+                 patch.object(record_module.Path, "home", return_value=Path(home)):
+                self.assertIsNone(record_module._hermes_telemetry("no-such-session"))
+
     def test_codex_reads_token_count_and_function_call_breakdown(self):
         with tempfile.TemporaryDirectory() as home:
             thread_id = "01a095fe-abc"
