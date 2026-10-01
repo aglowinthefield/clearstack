@@ -84,6 +84,52 @@ class RecordTest(unittest.TestCase):
         end = next(e for e in self.log() if e["event"] == "end")
         self.assertIsNone(end["telemetry"])
 
+    def test_two_sequential_runs_in_one_session_each_get_their_own_delta(self):
+        import sqlite3
+        db_path = Path(self.state.name) / "state.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("""CREATE TABLE sessions (
+            id TEXT PRIMARY KEY, model TEXT, tool_call_count INTEGER,
+            input_tokens INTEGER, output_tokens INTEGER,
+            cache_read_tokens INTEGER, cache_write_tokens INTEGER,
+            estimated_cost_usd REAL, actual_cost_usd REAL)""")
+        conn.execute("CREATE TABLE messages (session_id TEXT, tool_name TEXT)")
+        conn.execute("INSERT INTO sessions VALUES ('sess-1','claude-sonnet-5',0,0,0,0,0,0,0)")
+        conn.commit()
+
+        def set_cumulative(tool_calls, cost, tool_names):
+            conn.execute("UPDATE sessions SET tool_call_count=?, estimated_cost_usd=?, actual_cost_usd=? WHERE id='sess-1'",
+                         (tool_calls, cost, cost))
+            conn.execute("DELETE FROM messages WHERE session_id='sess-1'")
+            conn.executemany("INSERT INTO messages VALUES ('sess-1', ?)", [(n,) for n in tool_names])
+            conn.commit()
+
+        self.env["HERMES_SESSION_ID"] = "sess-1"
+        self.env["HERMES_HOME"] = self.state.name
+        env_no_other = {k: v for k, v in self.env.items()
+                        if k not in ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")}
+        self.env = env_no_other
+
+        set_cumulative(0, 0.0, [])
+        run_a = self.run_record("start", "--task", "first run").stdout.strip()
+        set_cumulative(5, 1.0, ["terminal"] * 5)
+        self.run_record("end", run_a, "--status", "done")
+
+        run_b = self.run_record("start", "--task", "second run").stdout.strip()
+        set_cumulative(9, 1.5, ["terminal"] * 7 + ["patch"] * 2)
+        self.run_record("end", run_b, "--status", "done")
+        conn.close()
+
+        log = self.log()
+        end_a = next(e for e in log if e["run"] == run_a and e["event"] == "end")
+        end_b = next(e for e in log if e["run"] == run_b and e["event"] == "end")
+
+        self.assertEqual(end_a["telemetry"]["tool_calls"], 5)
+        self.assertEqual(end_a["telemetry"]["cost_usd"], 1.0)
+        self.assertEqual(end_b["telemetry"]["tool_calls"], 4)
+        self.assertEqual(end_b["telemetry"]["cost_usd"], 0.5)
+        self.assertEqual(end_b["telemetry"]["tool_breakdown"], {"terminal": 2, "patch": 2})
+
 
 class TelemetryTest(unittest.TestCase):
     def test_claude_code_reads_cost_state_and_tool_use_count(self):
@@ -221,6 +267,41 @@ class TelemetryTest(unittest.TestCase):
                if k not in ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "HERMES_SESSION_ID")}
         with patch.dict(os.environ, env, clear=True):
             self.assertIsNone(record_module.telemetry())
+
+    def test_delta_subtracts_baseline_from_cumulative_totals(self):
+        baseline = {"source": "hermes", "model": "claude-sonnet-5",
+                    "tokens": {"input": 100, "output": 50, "cache_read": 10, "cache_write": 5},
+                    "cost_usd": 1.0, "tool_calls": 5, "tool_breakdown": {"terminal": 3, "patch": 2}}
+        current = {"source": "hermes", "model": "claude-sonnet-5",
+                   "tokens": {"input": 150, "output": 80, "cache_read": 10, "cache_write": 5},
+                   "cost_usd": 1.5, "tool_calls": 9, "tool_breakdown": {"terminal": 5, "patch": 2, "read_file": 2}}
+
+        result = record_module.delta_telemetry(baseline, current)
+
+        self.assertEqual(result["tokens"], {"input": 50, "output": 30, "cache_read": 0, "cache_write": 0})
+        self.assertEqual(result["cost_usd"], 0.5)
+        self.assertEqual(result["tool_calls"], 4)
+        self.assertEqual(result["tool_breakdown"], {"terminal": 2, "read_file": 2})
+
+    def test_delta_without_baseline_returns_current_unchanged(self):
+        current = {"source": "hermes", "tokens": {"input": 10}, "cost_usd": 0.1, "tool_calls": 1}
+        self.assertEqual(record_module.delta_telemetry(None, current), current)
+
+    def test_delta_with_mismatched_source_returns_current_unchanged(self):
+        baseline = {"source": "codex", "tokens": {}, "cost_usd": None, "tool_calls": 0}
+        current = {"source": "hermes", "tokens": {"input": 10}, "cost_usd": 0.1, "tool_calls": 1}
+        self.assertEqual(record_module.delta_telemetry(baseline, current), current)
+
+    def test_delta_with_no_current_returns_none(self):
+        self.assertIsNone(record_module.delta_telemetry({"source": "hermes"}, None))
+
+    def test_delta_clamps_negative_deltas_to_zero(self):
+        baseline = {"source": "hermes", "tokens": {"input": 100}, "cost_usd": 2.0, "tool_calls": 10}
+        current = {"source": "hermes", "tokens": {"input": 50}, "cost_usd": 1.0, "tool_calls": 3}
+        result = record_module.delta_telemetry(baseline, current)
+        self.assertEqual(result["tokens"]["input"], 0)
+        self.assertEqual(result["cost_usd"], 0.0)
+        self.assertEqual(result["tool_calls"], 0)
 
 
 if __name__ == "__main__":

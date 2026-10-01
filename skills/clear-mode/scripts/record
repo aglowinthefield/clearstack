@@ -247,6 +247,9 @@ def telemetry():
 
     Returns None when no harness session id is set or its log is unreadable,
     never a dict of zeros, so the dashboard can tell "no data" from "zero".
+    These totals are cumulative for the whole harness session, not scoped to
+    one ClearStack run: callers that want a per-run figure must subtract a
+    baseline taken at the run's start (see ``delta_telemetry``).
     """
     claude_session = os.environ.get("CLAUDE_CODE_SESSION_ID")
     if claude_session:
@@ -264,6 +267,54 @@ def telemetry():
         if result:
             return result
     return None
+
+
+def delta_telemetry(baseline, current):
+    """Subtract a start-of-run baseline from the current cumulative totals.
+
+    A harness session (especially Hermes: one session is one whole chat,
+    potentially many ClearStack runs) accumulates tokens/cost/tool-calls for
+    its entire lifetime, not per run. Without this, every run after the
+    first in a session would report the same growing cumulative total
+    instead of its own share. Falls back to the raw current reading when
+    there is no usable baseline (first run in a session, or the source
+    changed under us), which matches the old behavior rather than hiding
+    data. Negative deltas from a counter reset clamp to 0.
+    """
+    if not current:
+        return None
+    if not baseline or baseline.get("source") != current.get("source"):
+        return current
+
+    def sub(a, b):
+        return max(0, (a or 0) - (b or 0))
+
+    current_tokens = current.get("tokens") or {}
+    baseline_tokens = baseline.get("tokens") or {}
+    tokens = {key: sub(current_tokens.get(key), baseline_tokens.get(key))
+              for key in ("input", "output", "cache_read", "cache_write")}
+
+    cost = None
+    current_cost, baseline_cost = current.get("cost_usd"), baseline.get("cost_usd")
+    if isinstance(current_cost, (int, float)):
+        cost = round(max(0.0, current_cost - baseline_cost), 4) if isinstance(baseline_cost, (int, float)) \
+            else current_cost
+
+    tool_breakdown = {}
+    baseline_breakdown = baseline.get("tool_breakdown") or {}
+    for name, count in (current.get("tool_breakdown") or {}).items():
+        d = sub(count, baseline_breakdown.get(name))
+        if d:
+            tool_breakdown[name] = d
+
+    return {
+        "source": current.get("source"),
+        "model": current.get("model"),
+        "tokens": tokens,
+        "cost_usd": cost,
+        "tool_calls": sub(current.get("tool_calls"), baseline.get("tool_calls")),
+        "tool_breakdown": tool_breakdown,
+    }
 
 
 def append(record):
@@ -301,6 +352,7 @@ def start(args):
         ),
         "parent_run_id": parent_run,
         "spawned_by": args.spawned_by if parent_run else None,
+        "telemetry_baseline": telemetry(),
         **git_state(),
     })
     print(run_id)
@@ -309,6 +361,18 @@ def start(args):
 def note(args):
     require_run(args.run)
     append({"event": "note", "run": args.run, "text": args.text})
+
+
+def _telemetry_baseline(run_id):
+    path = log_path()
+    if not path.exists():
+        return None
+    with path.open() as f:
+        for line in f:
+            entry = json.loads(line)
+            if entry.get("event") == "start" and entry.get("run") == run_id:
+                return entry.get("telemetry_baseline")
+    return None
 
 
 def end(args):
@@ -323,7 +387,7 @@ def end(args):
         "unverified": args.unverified,
         "needs": args.needs,
         "pr": args.pr,
-        "telemetry": telemetry(),
+        "telemetry": delta_telemetry(_telemetry_baseline(args.run), telemetry()),
         **git_state(),
     })
 
