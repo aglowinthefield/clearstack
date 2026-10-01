@@ -93,6 +93,27 @@ def _claims(title, claims):
     return f"<section><h3>{escape(title)}</h3><ul>{items}</ul></section>"
 
 
+def _format_tokens(n):
+    return f"{n:,}" if isinstance(n, (int, float)) else "—"
+
+
+def _telemetry_section(end):
+    telemetry = end.get("telemetry") if end else None
+    if not telemetry:
+        return "<section><h3>Telemetry</h3><p class=muted>Not collected for this run.</p></section>"
+    tokens = telemetry.get("tokens") or {}
+    cost = telemetry.get("cost_usd")
+    cost_text = f"${cost:.4f}" if isinstance(cost, (int, float)) else "—"
+    rows = "".join(f"""<div><dt>{escape(label)}</dt><dd>{_format_tokens(tokens.get(key, 0))}</dd></div>"""
+                    for label, key in (("Input", "input"), ("Output", "output"),
+                                        ("Cache read", "cache_read"), ("Cache write", "cache_write")))
+    return f"""<section><h3>Telemetry · {escape(str(telemetry.get('source') or 'unknown'))}</h3>
+      <dl class=metadata>{rows}
+        <div><dt>Tool calls</dt><dd>{_format_tokens(telemetry.get('tool_calls'))}</dd></div>
+        <div><dt>Cost</dt><dd>{escape(cost_text)}</dd></div>
+      </dl></section>"""
+
+
 def _detail(run):
     start = run["start"]
     end = run["end"] or {}
@@ -113,6 +134,7 @@ def _detail(run):
         <div><dt>Commit</dt><dd><code>{escape(str(start.get('head') or '—'))}</code></dd></div>
       </dl>
       <section><h3>Decision notes</h3><ul>{note_html}</ul></section>
+      {_telemetry_section(end)}
       {_claims('Verified', end.get('verified', []))}
       {_claims('Unverified', end.get('unverified', []))}
       {f"<section><h3>Needs</h3><p>{escape(str(end['needs']))}</p></section>" if end.get('needs') else ''}
@@ -124,6 +146,7 @@ def render_page(runs, selected_id=None, error=None):
     """Render one self-contained HTML page. All run data is escaped."""
     counts = {name: sum(run["status"] == name for run in runs) for name in ("open", "done", "parked", "abandoned")}
     selected = next((run for run in runs if run["id"] == selected_id), None)
+    has_telemetry = any((run["end"] or {}).get("telemetry") for run in runs if run["end"])
     rows = []
     for run in runs:
         start = run["start"]
@@ -168,7 +191,7 @@ td:nth-child(2),td:nth-child(3),td:nth-child(4){{font-size:13px;color:var(--mute
 <div class=summary><div class=metric><strong>{len(runs)}</strong><span>runs</span></div>
 <div class=metric><strong>{counts['open']}</strong><span>open</span></div><div class=metric><strong>{counts['done']}</strong><span>done</span></div>
 <div class=metric><strong>{counts['parked']}</strong><span>parked</span></div></div>
-<div class=telemetry><strong>Token and tool telemetry is not collected yet.</strong> The current run log has decisions and claims, but no usage or tool-call events. Totals are not shown as zero.</div>
+{"" if has_telemetry else '<div class=telemetry><strong>Token and tool telemetry is not collected yet.</strong> No run in this log has it. Open a run detail to check once one does. Totals are not shown as zero.</div>'}
 {error_html}<section><div class=section-title><h2>Recent runs</h2><span class=count>newest first</span></div>{table}</section>
 {detail_html}{missing}</main></body></html>"""
 

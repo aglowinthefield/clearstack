@@ -37,6 +37,142 @@ def git_state():
     }
 
 
+def _claude_code_telemetry(session_id):
+    """Read token, cost, and tool-call totals from a Claude Code transcript."""
+    base = Path.home() / ".claude" / "projects"
+    matches = list(base.glob(f"*/{session_id}.jsonl")) if base.is_dir() else []
+    if not matches:
+        return None
+    tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+    cost = None
+    tool_calls = 0
+    try:
+        with matches[0].open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "cost-state":
+                    cost = event.get("totalCostUSD")
+                    tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+                    for usage in (event.get("modelUsage") or {}).values():
+                        tokens["input"] += usage.get("inputTokens", 0)
+                        tokens["output"] += usage.get("outputTokens", 0)
+                        tokens["cache_read"] += usage.get("cacheReadInputTokens", 0)
+                        tokens["cache_write"] += usage.get("cacheCreationInputTokens", 0)
+                elif event.get("type") == "assistant":
+                    content = (event.get("message") or {}).get("content")
+                    if isinstance(content, list):
+                        tool_calls += sum(1 for c in content if isinstance(c, dict) and c.get("type") == "tool_use")
+    except OSError:
+        return None
+    if cost is None:
+        return None
+    return {"source": "claude-code", "tokens": tokens, "cost_usd": round(cost, 4), "tool_calls": tool_calls}
+
+
+def _codex_telemetry(thread_id):
+    """Read token totals and tool-call counts from a Codex session rollout."""
+    base = Path.home() / ".codex" / "sessions"
+    matches = list(base.glob(f"**/*{thread_id}*.jsonl")) if base.is_dir() else []
+    if not matches:
+        return None
+    usage = None
+    tool_calls = 0
+    try:
+        with matches[0].open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "event_msg":
+                    payload = event.get("payload") or {}
+                    if payload.get("type") == "token_count":
+                        info = (payload.get("info") or {}).get("total_token_usage")
+                        if info:
+                            usage = info
+                elif event.get("type") == "response_item":
+                    if (event.get("payload") or {}).get("type") == "function_call":
+                        tool_calls += 1
+    except OSError:
+        return None
+    if usage is None:
+        return None
+    return {
+        "source": "codex",
+        "tokens": {
+            "input": usage.get("input_tokens", 0),
+            "output": usage.get("output_tokens", 0),
+            "cache_read": usage.get("cached_input_tokens", 0),
+            "cache_write": usage.get("cache_write_input_tokens", 0),
+        },
+        "cost_usd": None,
+        "tool_calls": tool_calls,
+    }
+
+
+def _hermes_session_path(session_id):
+    direct = Path.home() / ".hermes" / "webui" / "sessions" / f"{session_id}.json"
+    if direct.is_file():
+        return direct
+    profiles_root = Path.home() / ".hermes" / "profiles"
+    if profiles_root.is_dir():
+        matches = list(profiles_root.glob(f"*/sessions/{session_id}.json"))
+        if matches:
+            return matches[0]
+    return None
+
+
+def _hermes_telemetry(session_id):
+    """Read token, cost, and tool-call totals from a Hermes session file."""
+    path = _hermes_session_path(session_id)
+    if path is None:
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if "input_tokens" not in data:
+        return None
+    return {
+        "source": "hermes",
+        "tokens": {
+            "input": data.get("input_tokens", 0),
+            "output": data.get("output_tokens", 0),
+            "cache_read": data.get("cache_read_tokens", 0),
+            "cache_write": data.get("cache_write_tokens", 0),
+        },
+        "cost_usd": data.get("estimated_cost"),
+        "tool_calls": len(data.get("tool_calls") or []),
+    }
+
+
+def telemetry():
+    """Best-effort token/cost/tool-call totals from the harness's own local log.
+
+    Returns None when no harness session id is set or its log is unreadable,
+    never a dict of zeros, so the dashboard can tell "no data" from "zero".
+    """
+    claude_session = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if claude_session:
+        result = _claude_code_telemetry(claude_session)
+        if result:
+            return result
+    codex_thread = os.environ.get("CODEX_THREAD_ID")
+    if codex_thread:
+        result = _codex_telemetry(codex_thread)
+        if result:
+            return result
+    hermes_session = os.environ.get("HERMES_SESSION_ID")
+    if hermes_session:
+        result = _hermes_telemetry(hermes_session)
+        if result:
+            return result
+    return None
+
+
 def append(record):
     path = log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -64,7 +200,11 @@ def start(args):
         "task": args.task,
         "playbook": args.playbook,
         "agent": os.environ.get("AI_AGENT") or ("codex" if os.environ.get("CODEX_THREAD_ID") else None),
-        "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID"),
+        "session": (
+            os.environ.get("CLAUDE_CODE_SESSION_ID")
+            or os.environ.get("CODEX_THREAD_ID")
+            or os.environ.get("HERMES_SESSION_ID")
+        ),
         **git_state(),
     })
     print(run_id)
@@ -87,6 +227,7 @@ def end(args):
         "unverified": args.unverified,
         "needs": args.needs,
         "pr": args.pr,
+        "telemetry": telemetry(),
         **git_state(),
     })
 

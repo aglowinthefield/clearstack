@@ -102,7 +102,7 @@ Start the read-only run dashboard with:
 python3 -m clearstack.dashboard
 ```
 
-It serves only on `127.0.0.1:8765` and reads `~/.local/state/clearstack/runs.jsonl` (or `$XDG_STATE_HOME/clearstack/runs.jsonl`). It makes no network requests and does not change the log. This first version shows run status, duration, decision notes, and claims. Token and tool-call telemetry is not collected by the current run log, so the dashboard labels it as unavailable rather than showing zero.
+It serves only on `127.0.0.1:8765` and reads `~/.local/state/clearstack/runs.jsonl` (or `$XDG_STATE_HOME/clearstack/runs.jsonl`). It makes no network requests and does not change the log. This first version shows run status, duration, decision notes, and claims. `scripts/record end` reads token, cache, and tool-call totals from the harness's own local session log (Claude Code's `~/.claude/projects/*/<session>.jsonl`, Codex's `~/.codex/sessions/**/<thread>.jsonl`, or Hermes's `~/.hermes/webui/sessions/<session>.json`) when a matching session id is set in the environment, and stores them on the run record. A run with no matching session log shows "not collected" rather than zero.
 
 The dashboard should also preserve the user's original request and pending decisions through long agent output, so the current goal does not get buried. This first version reads run records only and does not capture conversation text.
 
@@ -115,7 +115,7 @@ The dashboard should also preserve the user's original request and pending decis
 | 2 | Playbooks: investigate, bug-fix, feature, review, ship, pickup/handoff | planned |
 | 3 | `clear-stats`: outcomes, claim vs proof, rework, corrections, and cost across Claude Code, Codex, Hermes, and GitHub | planned |
 | 4 | `clear-reflect`: mine transcripts for repeated corrections and repeated tool-call chains, and propose principles, guards, or scripts | planned |
-| 5 | Local dashboard: read-only view of run records | in progress; token and tool-call telemetry still needs a local source |
+| 5 | Local dashboard: read-only view of run records | in progress; telemetry now reads from the harness session log when available |
 
 ## Develop
 
