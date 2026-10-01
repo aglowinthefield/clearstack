@@ -274,6 +274,52 @@ def _activity_feed(runs):
     return f"<ul class=activity-list>{items}</ul>"
 
 
+def _event_pulse(runs, bucket_seconds=30, bucket_count=24):
+    """Bucket every event into fixed-width time windows ending now, oldest first.
+
+    Gives a heartbeat-style read of recent activity volume. Buckets with no
+    events are 0, not omitted, so gaps in activity show as flat line.
+    """
+    now = datetime.now(timezone.utc)
+    span_start = now.timestamp() - bucket_seconds * bucket_count
+    buckets = [0] * bucket_count
+    for run in runs:
+        for event in run["events"]:
+            parsed = _parse_time(event.get("ts"))
+            if not parsed:
+                continue
+            offset = parsed.timestamp() - span_start
+            index = int(offset // bucket_seconds)
+            if 0 <= index < bucket_count:
+                buckets[index] += 1
+    return buckets
+
+
+def _pulse_chart(runs):
+    buckets = _event_pulse(runs)
+    peak = max(buckets) or 1
+    bars = "".join(
+        f'<span class=pulse-bar style="height:{max(6, round(n / peak * 100))}%" data-count="{n}"></span>'
+        for n in buckets
+    )
+    total = sum(buckets)
+    return f"""<section class="panel glass pulse-panel">
+      <div class=section-title><h2>Pulse</h2><span class=count>{total} events · last 12 min</span></div>
+      <div class=pulse-chart>{bars}</div>
+    </section>"""
+
+
+def _status_mix(counts, total):
+    if not total:
+        return ""
+    order = (("open", "aqua"), ("done", "mint"), ("parked", "amber"), ("abandoned", "coral"))
+    segments = "".join(
+        f'<span class="mix-seg mix-{color}" style="flex:{counts[name]}" title="{counts[name]} {name}"></span>'
+        for name, color in order if counts[name]
+    )
+    return f'<div class=status-mix>{segments}</div>'
+
+
 def render_page(runs, selected_id=None, error=None, bind_host="127.0.0.1"):
     """Render one self-contained HTML page. All run data is escaped."""
     counts = {name: sum(run["status"] == name for run in runs) for name in ("open", "done", "parked", "abandoned")}
@@ -322,7 +368,7 @@ body{{margin:0;min-height:100vh;color:var(--ink);font:15px/1.5 system-ui,-apple-
     radial-gradient(420px 420px at 88% 6%,rgba(255,255,255,.95),rgba(255,255,255,.25) 40%,rgba(255,255,255,0) 62%),
     linear-gradient(180deg,var(--sky-top) 0%,var(--sky-mid) 38%,var(--sky-low) 72%,var(--sky-horizon) 100%);
   background-attachment:fixed}}
-main{{max-width:1100px;margin:0 auto;padding:44px 28px 72px}}
+main{{max-width:1280px;margin:0 auto;padding:44px 28px 72px}}
 .glass{{background:
     radial-gradient(120% 70% at 30% -20%,rgba(255,255,255,.95),rgba(255,255,255,0) 60%),
     var(--surface);
@@ -347,6 +393,21 @@ h1{{font-size:clamp(26px,4vw,38px);line-height:1;margin:0;letter-spacing:-.03em;
 .metric{{display:flex;align-items:baseline;gap:9px}}.metric strong{{font:800 22px ui-monospace,monospace;color:var(--aqua-deep);
   text-shadow:0 1px 0 rgba(255,255,255,.6)}}
 .metric span{{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}}
+.status-mix{{display:flex;height:8px;border-radius:999px;overflow:hidden;margin:0 0 18px;
+  box-shadow:inset 0 1px 2px rgba(9,56,97,.18)}}
+.mix-seg{{min-width:3px}}
+.mix-aqua{{background:linear-gradient(90deg,var(--aqua),var(--aqua-deep))}}
+.mix-mint{{background:linear-gradient(90deg,#4fe3a0,var(--mint))}}
+.mix-amber{{background:linear-gradient(90deg,#ffcf5c,var(--amber))}}
+.mix-coral{{background:linear-gradient(90deg,#ff8a9c,var(--coral))}}
+.pulse-panel{{margin-bottom:18px;padding:16px 20px}}
+.pulse-chart{{display:flex;align-items:flex-end;gap:4px;height:64px;padding-top:6px}}
+.pulse-bar{{flex:1;min-height:6px;border-radius:3px 3px 1px 1px;
+  background:linear-gradient(180deg,#5fd1ff,var(--aqua-deep));box-shadow:0 0 6px rgba(19,154,214,.5);
+  transition:height .5s cubic-bezier(.34,1.56,.64,1)}}
+.pulse-bar:last-child{{background:linear-gradient(180deg,#8dffc6,var(--mint));box-shadow:0 0 8px rgba(31,174,110,.6);
+  animation:pulse-live 1.4s ease-in-out infinite}}
+@keyframes pulse-live{{0%,100%{{opacity:1}}50%{{opacity:.55}}}}
 .telemetry.glass{{margin:0 0 18px;padding:13px 18px;border-left:4px solid var(--aqua);font-size:13px}}.telemetry strong{{font-weight:650}}
 .section-title{{display:flex;justify-content:space-between;align-items:baseline;margin:0 0 12px}}
 h2{{font-size:18px;margin:0;letter-spacing:-.02em;color:var(--ink)}}.count{{font:11px ui-monospace,monospace;color:var(--muted)}}
@@ -367,7 +428,7 @@ td:nth-child(2),td:nth-child(3),td:nth-child(4){{font-size:13px;color:var(--mute
 .status.open::before{{content:"";display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;
   background:var(--aqua-deep);animation:status-pulse 1.6s ease-in-out infinite}}
 @keyframes status-pulse{{0%,100%{{opacity:1}}50%{{opacity:.35}}}}
-.columns{{display:grid;grid-template-columns:1.6fr 1fr;gap:20px;align-items:start}}
+.columns{{display:grid;grid-template-columns:2.1fr 1fr;gap:20px;align-items:start}}
 .activity-panel{{padding-bottom:12px}}
 .activity-list{{list-style:none;margin:0;padding:4px 4px 8px}}
 .activity-item{{display:flex;gap:10px;padding:9px 6px;border-bottom:1px solid var(--line);font-size:13px}}
@@ -413,7 +474,9 @@ ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}
 <div class=metric><strong>{counts['open']}</strong><span>open</span></div><div class=metric><strong>{counts['done']}</strong><span>done</span></div>
 <div class=metric><strong>{counts['parked']}</strong><span>parked</span></div>
 {f'<div class=metric><strong>${total_cost:.2f}</strong><span>total cost</span></div>' if has_telemetry else ''}</div>
+{_status_mix(counts, len(runs))}
 {"" if has_telemetry else '<div class="telemetry glass"><strong>Token and tool telemetry is not collected yet.</strong> No run in this log has it. Open a run detail to check once one does. Totals are not shown as zero.</div>'}
+{_pulse_chart(runs)}
 {error_html}<div class=columns>
 <section class="panel glass"><div class=section-title><h2>Recent runs</h2><span class=count>newest first</span></div>{table}</section>
 <section class="panel glass activity-panel"><div class=section-title><h2>Activity</h2><span class=count>live feed</span></div>{_activity_feed(runs)}</section>

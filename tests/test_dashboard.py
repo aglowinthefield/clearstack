@@ -4,6 +4,7 @@ import threading
 import time
 import unittest
 import urllib.request
+from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -170,6 +171,40 @@ class DashboardTest(unittest.TestCase):
 
         page = render_page(load_runs(self.log))
         self.assertIn("orphan task", page)
+
+    def test_pulse_chart_renders_a_bar_per_bucket(self):
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self.write_events(
+            {"ts": now, "event": "start", "run": "r1", "task": "fresh", "agent": "hermes"},
+        )
+
+        page = render_page(load_runs(self.log))
+
+        self.assertIn("pulse-chart", page)
+        self.assertEqual(page.count("<span class=pulse-bar"), 24)
+        self.assertIn('data-count="1"', page)
+
+    def test_pulse_chart_handles_no_runs(self):
+        page = render_page(load_runs(self.log))
+        self.assertIn("pulse-chart", page)
+        self.assertIn("0 events", page)
+
+    def test_status_mix_bar_reflects_counts(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "a", "task": "a", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "start", "run": "b", "task": "b", "agent": "hermes"},
+            {"ts": "2026-10-01T10:02:00+00:00", "event": "end", "run": "b", "status": "done", "verified": [], "unverified": []},
+        )
+
+        page = render_page(load_runs(self.log))
+
+        self.assertIn("<div class=status-mix>", page)
+        self.assertIn('class="mix-seg mix-aqua"', page)
+        self.assertIn('class="mix-seg mix-mint"', page)
+
+    def test_status_mix_empty_with_no_runs(self):
+        page = render_page(load_runs(self.log))
+        self.assertNotIn("<div class=status-mix>", page)
 
 
 class SSETest(unittest.TestCase):
