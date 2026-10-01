@@ -6,6 +6,6 @@ Pillar: observation
 
 **Applies when.** Ending a run, or tempted to describe your own work as a success.
 
-**Changes.** `record end` lists claims as verified or unverified and names a status (`done`, `parked`, `abandoned`). It never carries a quality score, and the reply never calls the work "solid" or "robust".
+**Changes.** `record end` lists claims as verified or unverified and names a status (`done`, `parked`, `abandoned`). It never carries a quality score, and the reply never calls the work `solid` or `robust`.
 
 **Counter-example.** A run that marks itself successful because CI is green, which later merges and gets reverted the next day.
