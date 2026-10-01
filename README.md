@@ -94,16 +94,28 @@ Every clear-mode run appends to `~/.local/state/clearstack/runs.jsonl` on your m
 
 Commits made during a run carry a `Clear-Run: <id>` trailer, which links GitHub history back to the run. The agent never grades its own work. Whether it held up (merged unchanged, reworked, reverted) comes later from GitHub and the session transcripts.
 
+## Local dashboard
+
+Start the read-only run dashboard with:
+
+```bash
+python3 -m clearstack.dashboard
+```
+
+It serves only on `127.0.0.1:8765` and reads `~/.local/state/clearstack/runs.jsonl` (or `$XDG_STATE_HOME/clearstack/runs.jsonl`). It makes no network requests and does not change the log. This first version shows run status, duration, decision notes, and claims. Token and tool-call telemetry is not collected by the current run log, so the dashboard labels it as unavailable rather than showing zero.
+
+The dashboard should also preserve the user's original request and pending decisions through long agent output, so the current goal does not get buried. This first version reads run records only and does not capture conversation text.
+
 ## Status
 
 | | Piece | State |
 |---|---|---|
 | 1 | `clear-mode`, principles, `scripts/record` | merged |
-| 1b | `clear-voice` output style and `voice-check` | in review |
+| 1b | `clear-voice` output style and `voice-check` | merged |
 | 2 | Playbooks: investigate, bug-fix, feature, review, ship, pickup/handoff | planned |
 | 3 | `clear-stats`: outcomes, claim vs proof, rework, corrections, and cost across Claude Code, Codex, Hermes, and GitHub | planned |
 | 4 | `clear-reflect`: mine transcripts for repeated corrections and repeated tool-call chains, and propose principles, guards, or scripts | planned |
-| 5 | Local dashboard: every run with its tokens, tool calls, duration, decisions, claims, and outcome, read from the run log and harness transcripts on this machine. No network calls. | planned |
+| 5 | Local dashboard: read-only view of run records | in progress; token and tool-call telemetry still needs a local source |
 
 ## Develop
 
