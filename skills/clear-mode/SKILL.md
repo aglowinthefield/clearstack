@@ -77,6 +77,7 @@ Each file in `references/principles/` gives the rule, when it applies, the decis
 
 **Mutability**
 - `experiment-before-asking`: about to ask which approach, what something does, or whether it will work.
+- `parallelize-independent-work`: starting a task with two or more independent, parallelizable sub-tasks.
 
 ## Harness notes
 
