@@ -274,41 +274,6 @@ def _activity_feed(runs):
     return f"<ul class=activity-list>{items}</ul>"
 
 
-def _event_pulse(runs, bucket_seconds=30, bucket_count=24):
-    """Bucket every event into fixed-width time windows ending now, oldest first.
-
-    Gives a heartbeat-style read of recent activity volume. Buckets with no
-    events are 0, not omitted, so gaps in activity show as flat line.
-    """
-    now = datetime.now(timezone.utc)
-    span_start = now.timestamp() - bucket_seconds * bucket_count
-    buckets = [0] * bucket_count
-    for run in runs:
-        for event in run["events"]:
-            parsed = _parse_time(event.get("ts"))
-            if not parsed:
-                continue
-            offset = parsed.timestamp() - span_start
-            index = int(offset // bucket_seconds)
-            if 0 <= index < bucket_count:
-                buckets[index] += 1
-    return buckets
-
-
-def _pulse_chart(runs):
-    buckets = _event_pulse(runs)
-    peak = max(buckets) or 1
-    bars = "".join(
-        f'<span class=pulse-bar style="height:{max(6, round(n / peak * 100))}%" data-count="{n}"></span>'
-        for n in buckets
-    )
-    total = sum(buckets)
-    return f"""<section class="panel glass pulse-panel">
-      <div class=section-title><h2>Pulse</h2><span class=count>{total} events · last 12 min</span></div>
-      <div class=pulse-chart>{bars}</div>
-    </section>"""
-
-
 def _status_mix(counts, total):
     if not total:
         return ""
@@ -400,14 +365,6 @@ h1{{font-size:clamp(26px,4vw,38px);line-height:1;margin:0;letter-spacing:-.03em;
 .mix-mint{{background:linear-gradient(90deg,#4fe3a0,var(--mint))}}
 .mix-amber{{background:linear-gradient(90deg,#ffcf5c,var(--amber))}}
 .mix-coral{{background:linear-gradient(90deg,#ff8a9c,var(--coral))}}
-.pulse-panel{{margin-bottom:18px;padding:16px 20px}}
-.pulse-chart{{display:flex;align-items:flex-end;gap:4px;height:64px;padding-top:6px}}
-.pulse-bar{{flex:1;min-height:6px;border-radius:3px 3px 1px 1px;
-  background:linear-gradient(180deg,#5fd1ff,var(--aqua-deep));box-shadow:0 0 6px rgba(19,154,214,.5);
-  transition:height .5s cubic-bezier(.34,1.56,.64,1)}}
-.pulse-bar:last-child{{background:linear-gradient(180deg,#8dffc6,var(--mint));box-shadow:0 0 8px rgba(31,174,110,.6);
-  animation:pulse-live 1.4s ease-in-out infinite}}
-@keyframes pulse-live{{0%,100%{{opacity:1}}50%{{opacity:.55}}}}
 .telemetry.glass{{margin:0 0 18px;padding:13px 18px;border-left:4px solid var(--aqua);font-size:13px}}.telemetry strong{{font-weight:650}}
 .section-title{{display:flex;justify-content:space-between;align-items:baseline;margin:0 0 12px}}
 h2{{font-size:18px;margin:0;letter-spacing:-.02em;color:var(--ink)}}.count{{font:11px ui-monospace,monospace;color:var(--muted)}}
@@ -419,7 +376,8 @@ tbody tr:hover{{background:rgba(19,154,214,.08)}}
 .run-link{{color:var(--ink);text-decoration:none;font-weight:600}}.run-link:hover{{color:var(--aqua-deep)}}
 small{{display:block;font:11px ui-monospace,monospace;color:var(--muted);font-weight:400;margin-top:2px}}
 td:nth-child(2),td:nth-child(3),td:nth-child(4){{font-size:13px;color:var(--muted)}}
-.status{{font-size:11px;text-transform:capitalize;font-weight:700;padding:3px 11px;border-radius:999px;
+td:nth-child(4),td:nth-child(5){{white-space:nowrap}}
+.status{{display:inline-flex;align-items:center;white-space:nowrap;font-size:11px;text-transform:capitalize;font-weight:700;padding:3px 11px;border-radius:999px;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.7)}}
 .status.done{{color:#065a3b;background:linear-gradient(180deg,rgba(255,255,255,.6),rgba(31,174,110,.22))}}
 .status.parked{{color:#7a4f06;background:linear-gradient(180deg,rgba(255,255,255,.6),rgba(217,148,18,.22))}}
@@ -476,7 +434,6 @@ ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}
 {f'<div class=metric><strong>${total_cost:.2f}</strong><span>total cost</span></div>' if has_telemetry else ''}</div>
 {_status_mix(counts, len(runs))}
 {"" if has_telemetry else '<div class="telemetry glass"><strong>Token and tool telemetry is not collected yet.</strong> No run in this log has it. Open a run detail to check once one does. Totals are not shown as zero.</div>'}
-{_pulse_chart(runs)}
 {error_html}<div class=columns>
 <section class="panel glass"><div class=section-title><h2>Recent runs</h2><span class=count>newest first</span></div>{table}</section>
 <section class="panel glass activity-panel"><div class=section-title><h2>Activity</h2><span class=count>live feed</span></div>{_activity_feed(runs)}</section>
