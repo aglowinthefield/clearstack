@@ -68,6 +68,16 @@ skills/clear-voice/scripts/voice-check PR_BODY.md
 
 The test suite runs it over every Markdown file in this repo.
 
+## Clear CI
+
+`clear-ci` replaces `gh pr checks --watch` and `gh run watch` after opening or updating a PR. Those block until every job in every workflow finishes; `clear-ci`'s `scripts/watch` polls job-level status instead and prints each real failure the moment it happens, so the agent can start fixing before the rest of the stack completes. A job GitHub marks `skipped` because a `needs:` dependency already failed is not reported, so one real break downstream of a chain does not read as several.
+
+```bash
+skills/clear-ci/scripts/watch --repo OWNER/REPO --pr 123
+```
+
+See [`skills/clear-ci/SKILL.md`](skills/clear-ci/SKILL.md) for the fix-or-ask decision on each failure.
+
 ## Principles
 
 Each principle is one short file in [`skills/clear-mode/references/principles/`](skills/clear-mode/references/principles/) giving the rule, when it applies, the decision it changes, and a counter-example.
@@ -112,6 +122,7 @@ The dashboard should also preserve the user's original request and pending decis
 |---|---|---|
 | 1 | `clear-mode`, principles, `scripts/record` | merged |
 | 1b | `clear-voice` output style and `voice-check` | merged |
+| 1c | `clear-ci`: fail-fast CI watcher, `scripts/watch` | merged |
 | 2 | Playbooks: investigate, bug-fix, feature, review, ship, pickup/handoff | planned |
 | 3 | `clear-stats`: outcomes, claim vs proof, rework, corrections, and cost across Claude Code, Codex, Hermes, and GitHub | planned |
 | 4 | `clear-reflect`: mine transcripts for repeated corrections and repeated tool-call chains, and propose principles, guards, or scripts | planned |
