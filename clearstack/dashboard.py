@@ -160,7 +160,7 @@ def _format_cost_cell(run):
     return f"{escape(cost_text)}<small>{escape(calls_text)}</small>" if calls_text else escape(cost_text)
 
 
-def render_page(runs, selected_id=None, error=None):
+def render_page(runs, selected_id=None, error=None, bind_host="127.0.0.1"):
     """Render one self-contained HTML page. All run data is escaped."""
     counts = {name: sum(run["status"] == name for run in runs) for name in ("open", "done", "parked", "abandoned")}
     selected = next((run for run in runs if run["id"] == selected_id), None)
@@ -207,7 +207,7 @@ td:nth-child(2),td:nth-child(3),td:nth-child(4){{font-size:13px;color:var(--mute
 .metadata{{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px 20px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:15px 0;margin:16px 0 24px}}dt{{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}}dd{{margin:2px 0 0;overflow-wrap:anywhere}}code{{font:12px ui-monospace,monospace}}.detail section{{margin:20px 0}}.detail h3{{font-size:14px;margin:0 0 6px}}ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}.muted,.empty{{color:var(--muted)}}.empty{{padding:25px 0}}.error{{color:#8c243d;background:#f9e5e8;padding:12px}}
 @media(max-width:700px){{main{{padding:25px 16px 48px}}header{{align-items:flex-start;flex-direction:column}}.table-wrap{{overflow-x:auto}}table{{min-width:660px}}.summary{{gap:18px}}}}
 </style></head><body><main>
-<header><div><p class=brand>ClearStack / local run log</p><h1>Runs</h1></div><span class=local>LOCAL ONLY · 127.0.0.1</span></header>
+<header><div><p class=brand>ClearStack / local run log</p><h1>Runs</h1></div><span class=local>{escape(bind_host)}</span></header>
 <div class=summary><div class=metric><strong>{len(runs)}</strong><span>runs</span></div>
 <div class=metric><strong>{counts['open']}</strong><span>open</span></div><div class=metric><strong>{counts['done']}</strong><span>done</span></div>
 <div class=metric><strong>{counts['parked']}</strong><span>parked</span></div>
@@ -218,6 +218,8 @@ td:nth-child(2),td:nth-child(3),td:nth-child(4){{font-size:13px;color:var(--mute
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
+    bind_host = "127.0.0.1"
+
     def do_GET(self):
         request = urlsplit(self.path)
         if request.path != "/":
@@ -226,10 +228,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         selected_id = parse_qs(request.query).get("run", [None])[0]
         try:
             runs = load_runs()
-            page = render_page(runs, selected_id=selected_id)
+            page = render_page(runs, selected_id=selected_id, bind_host=self.bind_host)
             status = 200
         except (OSError, ValueError) as error:
-            page = render_page([], error=f"Cannot read run log: {error}")
+            page = render_page([], error=f"Cannot read run log: {error}", bind_host=self.bind_host)
             status = 500
         body = page.encode("utf-8")
         self.send_response(status)
@@ -248,12 +250,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(description="Serve the local ClearStack run dashboard")
-    parser.add_argument("--port", type=int, default=8765, help="loopback port (default: 8765)")
+    parser.add_argument("--port", type=int, default=8765, help="port (default: 8765)")
+    parser.add_argument("--host", default="127.0.0.1",
+                         help="bind address (default: 127.0.0.1, loopback only). "
+                              "The dashboard has no auth: only bind beyond loopback on a network you trust, "
+                              "e.g. a Tailscale address.")
     args = parser.parse_args()
     if not 0 <= args.port <= 65535:
         parser.error("port must be between 0 and 65535")
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), DashboardHandler)
-    print(f"ClearStack dashboard: http://127.0.0.1:{server.server_port}")
+    DashboardHandler.bind_host = args.host
+    server = ThreadingHTTPServer((args.host, args.port), DashboardHandler)
+    if args.host != "127.0.0.1":
+        print(f"Warning: binding to {args.host} exposes run data (tasks, decisions, file paths) "
+              f"to anything that can reach port {server.server_port}. No authentication is enforced.")
+    print(f"ClearStack dashboard: http://{args.host}:{server.server_port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
