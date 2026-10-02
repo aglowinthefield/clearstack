@@ -1,0 +1,363 @@
+#!/usr/bin/env python3
+"""Mine agent history for repeated waste and propose guards.
+
+Reads ~/.hermes/state.db and ~/.local/state/clearstack/runs.jsonl.
+Proposes, never applies. Emit a machine-readable report and a short human summary.
+"""
+
+import argparse
+import json
+import sqlite3
+import sys
+from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+DEFAULT_STATE_DB = Path.home() / ".hermes" / "state.db"
+DEFAULT_RUNS_LOG = Path.home() / ".local" / "state" / "clearstack" / "runs.jsonl"
+SIZE_THRESHOLD = 20000
+REPEAT_MIN_COUNT = 3
+
+
+def connect_db(path):
+    """Open the state database read-only. Return (connection, note)."""
+    if not path.exists():
+        return None, f"state db not found at {path}"
+    try:
+        uri = f"file:{path}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        conn.row_factory = sqlite3.Row
+        return conn, None
+    except sqlite3.Error as e:
+        return None, f"could not open state db: {e}"
+
+
+def parse_tool_calls(tool_calls_json):
+    """Parse assistant tool_calls JSON into a list of (call_id, tool_name, arguments)."""
+    if not tool_calls_json:
+        return []
+    try:
+        calls = json.loads(tool_calls_json)
+    except (ValueError, TypeError):
+        return []
+    parsed = []
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        call_id = call.get("id") or call.get("call_id") or ""
+        func = call.get("function", {})
+        if isinstance(func, dict):
+            name = func.get("name", "")
+            args = func.get("arguments", "{}")
+            try:
+                args = json.loads(args) if isinstance(args, str) else args
+            except (ValueError, TypeError):
+                args = {}
+        else:
+            name = call.get("name", "")
+            args = call.get("arguments", {})
+        parsed.append((call_id, name, args))
+    return parsed
+
+
+def normalize_call(tool_name, arguments):
+    """Return a normalized command string for deduplication."""
+    if not isinstance(arguments, dict):
+        return f"{tool_name} ?"
+
+    if tool_name == "terminal":
+        cmd = arguments.get("command", "")
+        workdir = arguments.get("workdir", "")
+        if workdir and cmd.startswith(f"cd {workdir}"):
+            cmd = cmd[len(f"cd {workdir}"):].lstrip(" ;&")
+        home = str(Path.home())
+        cmd = cmd.replace(home, "~")
+        cmd = " ".join(cmd.split())
+        return f"terminal: {cmd}"
+
+    if tool_name == "read_file":
+        path = arguments.get("path", "")
+        return f"read_file: {path}"
+
+    if tool_name == "search_files":
+        pattern = arguments.get("pattern", "")
+        return f"search_files: {pattern}"
+
+    if tool_name == "web_extract":
+        urls = arguments.get("urls", [])
+        if isinstance(urls, list):
+            urls = tuple(sorted(urls))
+        return f"web_extract: {urls}"
+
+    if tool_name == "web_search":
+        query = arguments.get("query", "")
+        return f"web_search: {query}"
+
+    keys = tuple(sorted(arguments.keys()))
+    return f"{tool_name}({keys})"
+
+
+def command_shape(tool_name, arguments):
+    """Return an abstract command shape for grouping oversized results."""
+    if not isinstance(arguments, dict):
+        return f"{tool_name}: <unknown>"
+
+    if tool_name == "terminal":
+        cmd = arguments.get("command", "").strip()
+        parts = cmd.split()
+        base = parts[0] if parts else ""
+        return f"terminal: {base} <args>"
+
+    if tool_name == "read_file":
+        path = arguments.get("path", "")
+        ext = Path(path).suffix if path else ""
+        return f"read_file: *{ext}" if ext else "read_file: <path>"
+
+    if tool_name == "search_files":
+        pattern = arguments.get("pattern", "")
+        return f"search_files: {pattern}"
+
+    if tool_name == "web_extract":
+        return "web_extract: <urls>"
+
+    if tool_name == "web_search":
+        return "web_search: <query>"
+
+    return f"{tool_name}: <args>"
+
+
+def build_call_map(conn, session_ids=None):
+    """Build a map of tool_call_id -> (tool_name, arguments, normalized, shape)."""
+    where = "WHERE tool_calls IS NOT NULL"
+    params = ()
+    if session_ids:
+        placeholders = ",".join("?" for _ in session_ids)
+        where += f" AND session_id IN ({placeholders})"
+        params = tuple(session_ids)
+
+    call_map = {}
+    cur = conn.execute(
+        f"SELECT session_id, tool_calls FROM messages {where} ORDER BY id",
+        params,
+    )
+    for row in cur:
+        for call_id, tool_name, args in parse_tool_calls(row["tool_calls"]):
+            if call_id:
+                call_map[call_id] = {
+                    "tool_name": tool_name,
+                    "arguments": args,
+                    "normalized": normalize_call(tool_name, args),
+                    "shape": command_shape(tool_name, args),
+                }
+    return call_map
+
+
+def mine_oversized(conn, threshold=SIZE_THRESHOLD):
+    """Find tool results over threshold, grouped by tool_name and command_shape."""
+    call_map = build_call_map(conn)
+
+    cur = conn.execute(
+        """
+        SELECT session_id, tool_name, length(content) AS size, tool_call_id, id
+        FROM messages
+        WHERE role = 'tool' AND length(content) > ?
+        ORDER BY session_id, id
+        """,
+        (threshold,),
+    )
+
+    groups = defaultdict(list)
+    for row in cur:
+        info = call_map.get(row["tool_call_id"], {})
+        tool_name = row["tool_name"] or info.get("tool_name", "unknown")
+        shape = info.get("shape", f"{tool_name}: <unknown>")
+        groups[(tool_name, shape)].append({
+            "session_id": row["session_id"],
+            "size": row["size"],
+            "message_id": row["id"],
+        })
+
+    findings = []
+    for (tool_name, shape), items in groups.items():
+        findings.append({
+            "tool_name": tool_name,
+            "command_shape": shape,
+            "count": len(items),
+            "total_size": sum(i["size"] for i in items),
+            "max_size": max(i["size"] for i in items),
+            "session_ids": sorted(set(i["session_id"] for i in items)),
+        })
+
+    findings.sort(key=lambda x: x["total_size"], reverse=True)
+    return findings
+
+
+def mine_repeats(conn, min_count=REPEAT_MIN_COUNT):
+    """Find normalized commands run min_count+ times in one session."""
+    cur = conn.execute(
+        """
+        SELECT session_id, id, tool_calls, _compressed_summary
+        FROM messages
+        WHERE role = 'assistant' AND tool_calls IS NOT NULL
+        ORDER BY session_id, id
+        """
+    )
+
+    by_session_normalized = defaultdict(list)
+    compaction_points = {}
+
+    for row in cur:
+        sid = row["session_id"]
+        if row["_compressed_summary"]:
+            if sid not in compaction_points:
+                compaction_points[sid] = row["id"]
+            else:
+                compaction_points[sid] = min(compaction_points[sid], row["id"])
+
+        for call_id, tool_name, args in parse_tool_calls(row["tool_calls"]):
+            normalized = normalize_call(tool_name, args)
+            by_session_normalized[(sid, normalized)].append({
+                "message_id": row["id"],
+                "tool_name": tool_name,
+            })
+
+    findings = []
+    for (sid, normalized), occurrences in by_session_normalized.items():
+        if len(occurrences) < min_count:
+            continue
+
+        compaction_id = compaction_points.get(sid)
+        if compaction_id:
+            after_compaction = any(o["message_id"] > compaction_id for o in occurrences)
+            before_compaction = any(o["message_id"] < compaction_id for o in occurrences)
+            compaction_adjacent = after_compaction and before_compaction
+        else:
+            compaction_adjacent = False
+
+        findings.append({
+            "session_id": sid,
+            "tool_name": occurrences[0]["tool_name"],
+            "normalized_command": normalized,
+            "count": len(occurrences),
+            "compaction_adjacent": compaction_adjacent,
+            "message_ids": [o["message_id"] for o in occurrences],
+        })
+
+    findings.sort(key=lambda x: x["count"], reverse=True)
+    return findings
+
+
+def emit_summary(oversized, repeats):
+    """Return a short human-readable summary string."""
+    lines = []
+    lines.append(
+        f"Oversized tool results (>{SIZE_THRESHOLD} chars): {len(oversized)} finding(s)"
+    )
+    for f in oversized[:10]:
+        lines.append(
+            f"  {f['tool_name']}: {f['command_shape']} — {f['count']} call(s), "
+            f"max {f['max_size']:,} chars, total {f['total_size']:,} chars"
+        )
+    if len(oversized) > 10:
+        lines.append(f"  ... and {len(oversized) - 10} more")
+
+    lines.append("")
+    lines.append(
+        f"Repeated commands ({REPEAT_MIN_COUNT}+ in one session): {len(repeats)} finding(s)"
+    )
+    for f in repeats[:10]:
+        adj = " (compaction-adjacent)" if f["compaction_adjacent"] else ""
+        lines.append(
+            f"  {f['normalized_command']} — {f['count']} times in {f['session_id']}{adj}"
+        )
+    if len(repeats) > 10:
+        lines.append(f"  ... and {len(repeats) - 10} more")
+
+    return "\n".join(lines)
+
+
+def mine(state_db_path, runs_path):
+    """Run both detectors and return the full report dict."""
+    report = {
+        "generated_at": None,
+        "sources": {},
+        "findings": {
+            "oversized_results": [],
+            "repeated_commands": [],
+        },
+        "summary": "",
+    }
+
+    conn, note = connect_db(state_db_path)
+    if conn is None:
+        report["sources"]["state_db"] = {"path": str(state_db_path), "note": note}
+    else:
+        report["sources"]["state_db"] = {"path": str(state_db_path), "note": None}
+        try:
+            report["findings"]["oversized_results"] = mine_oversized(conn)
+            report["findings"]["repeated_commands"] = mine_repeats(conn)
+        finally:
+            conn.close()
+
+    if runs_path.exists():
+        report["sources"]["runs_jsonl"] = {"path": str(runs_path), "note": None}
+    else:
+        report["sources"]["runs_jsonl"] = {"path": str(runs_path), "note": "not found"}
+
+    report["summary"] = emit_summary(
+        report["findings"]["oversized_results"],
+        report["findings"]["repeated_commands"],
+    )
+    return report
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="mine",
+        description="Mine agent history for repeated waste and propose guards.",
+    )
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=DEFAULT_STATE_DB,
+        help="Path to Hermes state.db",
+    )
+    parser.add_argument(
+        "--runs",
+        type=Path,
+        default=DEFAULT_RUNS_LOG,
+        help="Path to clearstack runs.jsonl",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="Write output to this file",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["json", "summary", "both"],
+        default="both",
+        help="Output format",
+    )
+    args = parser.parse_args()
+
+    report = mine(args.db, args.runs)
+    report["generated_at"] = datetime.now(timezone.utc).isoformat()
+
+    if args.format in ("json", "both"):
+        json_out = json.dumps(report, indent=2)
+        if args.output and args.format == "json":
+            args.output.write_text(json_out)
+        elif not args.output or args.format == "both":
+            print(json_out)
+
+    if args.format in ("summary", "both"):
+        if args.output and args.format == "summary":
+            args.output.write_text(report["summary"])
+        elif not args.output or args.format == "both":
+            print(report["summary"])
+
+
+if __name__ == "__main__":
+    main()
