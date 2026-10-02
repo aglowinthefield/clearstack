@@ -336,6 +336,65 @@ def require_run(run_id):
     sys.exit(f"record: no run {run_id!r} in {path}")
 
 
+def _run_events(run_id):
+    path = log_path()
+    events = []
+    if path.exists():
+        with path.open() as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("run") == run_id:
+                    events.append(entry)
+    return events
+
+
+def resume(args):
+    events = _run_events(args.run)
+    if not events:
+        sys.exit(f"record: no run {args.run!r} in {log_path()}")
+
+    start = next((e for e in events if e["event"] == "start"), None)
+    end = next((e for e in reversed(events) if e["event"] == "end"), None)
+    notes = [e["text"] for e in events if e["event"] == "note"]
+    focus_events = [e["text"] for e in events if e["event"] == "focus"]
+
+    lines = []
+    lines.append(f"Run: {args.run}")
+    if start:
+        lines.append(f"Task: {start.get('task', '')}")
+        if start.get("playbook") and start["playbook"] != "none":
+            lines.append(f"Playbook: {start['playbook']}")
+    if focus_events:
+        lines.append(f"Focus: {focus_events[-1]}")
+    if notes:
+        lines.append("Notes:")
+        for n in notes:
+            lines.append(f"  - {n}")
+    if end:
+        if end.get("verified"):
+            lines.append("Verified:")
+            for v in end["verified"]:
+                lines.append(f"  - {v}")
+        if end.get("unverified"):
+            lines.append("Unverified:")
+            for u in end["unverified"]:
+                lines.append(f"  - {u}")
+        lines.append(f"Status: {end['status']}")
+        if end.get("needs"):
+            lines.append(f"Needs: {end['needs']}")
+    else:
+        lines.append("Status: running")
+
+    text = "\n".join(lines)
+    if args.limit and len(text) > args.limit:
+        text = text[:args.limit].rstrip()
+        text += "\n... (truncated)"
+    print(text)
+
+
 def start(args):
     run_id = f"cr-{datetime.now(timezone.utc):%Y%m%d}-{secrets.token_hex(3)}"
     parent_run = args.parent_run or os.environ.get("CLEARSTACK_PARENT_RUN")
@@ -428,6 +487,11 @@ def main():
     p.add_argument("--needs", help="the one decision a parked run needs")
     p.add_argument("--pr", help="PR URL or number")
     p.set_defaults(func=end)
+
+    p = sub.add_parser("resume", help="print a compact brief for resuming a run after context compaction")
+    p.add_argument("run")
+    p.add_argument("--limit", type=int, default=2048, help="max chars (truncates with ellipsis)")
+    p.set_defaults(func=resume)
 
     args = parser.parse_args()
     args.func(args)

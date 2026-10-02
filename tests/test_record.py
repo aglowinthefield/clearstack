@@ -101,6 +101,51 @@ class RecordTest(unittest.TestCase):
         end = next(e for e in self.log() if e["event"] == "end")
         self.assertIsNone(end["telemetry"])
 
+    def test_resume_prints_compact_brief(self):
+        run_id = self.run_record("start", "--task", "migrate billing", "--playbook", "feature").stdout.strip()
+        self.run_record("note", run_id, "decided on approach A")
+        self.run_record("focus", run_id, "waiting on API review")
+        self.run_record("end", run_id, "--status", "parked", "--needs", "API approval",
+                        "--verified", "schema agreed: ADR-004 signed",
+                        "--unverified", "migration script not tested")
+
+        result = self.run_record("resume", run_id)
+        self.assertEqual(result.returncode, 0)
+        out = result.stdout
+        self.assertIn("Run: " + run_id, out)
+        self.assertIn("Task: migrate billing", out)
+        self.assertIn("Playbook: feature", out)
+        self.assertIn("Focus: waiting on API review", out)
+        self.assertIn("decided on approach A", out)
+        self.assertIn("schema agreed: ADR-004 signed", out)
+        self.assertIn("migration script not tested", out)
+        self.assertIn("Status: parked", out)
+        self.assertIn("Needs: API approval", out)
+        self.assertLess(len(out), 2048)
+
+    def test_resume_for_running_run_shows_running_status(self):
+        run_id = self.run_record("start", "--task", "fix scroll").stdout.strip()
+        self.run_record("note", run_id, "hook works, callers untouched")
+        result = self.run_record("resume", run_id)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Status: running", result.stdout)
+        self.assertIn("hook works, callers untouched", result.stdout)
+
+    def test_resume_for_unknown_run_exits_nonzero(self):
+        result = self.run_record("resume", "cr-19700101-000000")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no run", result.stderr)
+
+    def test_resume_truncates_when_over_limit(self):
+        run_id = self.run_record("start", "--task", "x").stdout.strip()
+        for i in range(30):
+            self.run_record("note", run_id, f"note {i}: " + "y" * 80)
+        self.run_record("end", run_id, "--status", "done")
+        result = self.run_record("resume", run_id, "--limit", "500")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("... (truncated)", result.stdout)
+        self.assertLessEqual(len(result.stdout), 520)
+
     def test_two_sequential_runs_in_one_session_each_get_their_own_delta(self):
         import sqlite3
         db_path = Path(self.state.name) / "state.db"

@@ -12,8 +12,8 @@ Trigger: a parked run record or a handoff note needs to be resumed.
 ## Steps
 
 1. Open a run record with `--playbook pickup-handoff`. Set `--parent-run` if this continues a subagent run.
-2. Read the parked record, the handoff note, and the branch state.
-3. Verify each claim the previous run marked as verified. Re-verify on the current artifact.
+2. Read the parked record, the handoff note, and the branch state. If this session continues after a context compaction, run `scripts/record resume <previous-run-id>` first.
+3. Verify each claim the previous run marked as verified. Re-verify on the current artifact, except after a compaction handoff: then treat the claims `record resume` lists as verified as already proven and do not re-run their evidence commands. Re-verify only the claims it lists as unverified.
 4. Do the next reversible step. Commit at each unit.
 5. If the handoff names a single decision, resolve it or park with the new state.
 6. End the record with verified claims for everything you proved.
