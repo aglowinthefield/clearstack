@@ -235,5 +235,323 @@ class MineIntegrationTest(unittest.TestCase):
         self.assertIn("1 finding(s)", report["summary"])
 
 
+class UnusedSkillsTest(unittest.TestCase):
+    def _make_skills_dir(self, td, skills):
+        """Create a temporary skills directory.
+
+        skills: dict of name -> description
+        """
+        skills_dir = Path(td) / "skills"
+        for name, description in skills.items():
+            skill_dir = skills_dir / name
+            skill_dir.mkdir(parents=True)
+            frontmatter = f"---\nname: {name}\ndescription: \"{description}\"\n---\n"
+            (skill_dir / "SKILL.md").write_text(frontmatter)
+        return skills_dir
+
+    def _make_state_db(self, td, tool_calls_rows):
+        """Create a temporary state db with tool_calls rows.
+
+        tool_calls_rows: list of (session_id, msg_id, tool_calls_json)
+        """
+        db_path = Path(td) / "state.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT,
+                tool_call_id TEXT,
+                tool_calls TEXT,
+                tool_name TEXT,
+                _compressed_summary INTEGER NOT NULL DEFAULT 0,
+                timestamp REAL DEFAULT 0
+            )
+            """
+        )
+        for session_id, msg_id, tc_json in tool_calls_rows:
+            conn.execute(
+                "INSERT INTO messages (id, session_id, role, tool_calls) VALUES (?, ?, 'assistant', ?)",
+                (msg_id, session_id, tc_json),
+            )
+        conn.commit()
+        conn.close()
+        return db_path
+
+    def test_detects_used_skill_via_skill_view(self):
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = self._make_skills_dir(td, {
+                "alpha": "Alpha skill",
+                "beta": "Beta skill",
+            })
+            state_db = self._make_state_db(td, [
+                ("s1", 1, json.dumps([{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "skill_view", "arguments": '{"name": "alpha"}'},
+                }])),
+            ])
+
+            result = mine_module.mine_unused_skills(
+                skills_dir, state_db,
+                Path(td) / "profiles",
+                Path(td) / "hooks",
+                Path(td) / "scripts",
+                Path(td) / "boards",
+            )
+
+        unused_names = {s["name"] for s in result["skills"]}
+        self.assertNotIn("alpha", unused_names)
+        self.assertIn("beta", unused_names)
+
+    def test_detects_used_skill_via_skill_manage(self):
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = self._make_skills_dir(td, {
+                "alpha": "Alpha skill",
+                "beta": "Beta skill",
+            })
+            state_db = self._make_state_db(td, [
+                ("s1", 1, json.dumps([{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "skill_manage",
+                        "arguments": '{"operations":[{"name":"alpha","action":"patch","old_string":"x","new_string":"y"}]}',
+                    },
+                }])),
+            ])
+
+            result = mine_module.mine_unused_skills(
+                skills_dir, state_db,
+                Path(td) / "profiles",
+                Path(td) / "hooks",
+                Path(td) / "scripts",
+                Path(td) / "boards",
+            )
+
+        unused_names = {s["name"] for s in result["skills"]}
+        self.assertNotIn("alpha", unused_names)
+        self.assertIn("beta", unused_names)
+
+    def test_detects_used_skill_via_file_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = self._make_skills_dir(td, {
+                "alpha": "Alpha skill",
+                "beta": "Beta skill",
+            })
+            state_db = self._make_state_db(td, [
+                ("s1", 1, json.dumps([{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": json.dumps({"path": str(skills_dir / "alpha" / "SKILL.md")}),
+                    },
+                }])),
+            ])
+
+            result = mine_module.mine_unused_skills(
+                skills_dir, state_db,
+                Path(td) / "profiles",
+                Path(td) / "hooks",
+                Path(td) / "scripts",
+                Path(td) / "boards",
+            )
+
+        unused_names = {s["name"] for s in result["skills"]}
+        self.assertNotIn("alpha", unused_names)
+        self.assertIn("beta", unused_names)
+
+    def test_reference_in_hook_excludes(self):
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = self._make_skills_dir(td, {
+                "alpha": "Alpha skill",
+                "beta": "Beta skill",
+            })
+            hooks_dir = Path(td) / "hooks"
+            hooks_dir.mkdir()
+            (hooks_dir / "test.sh").write_text("echo alpha")
+            state_db = self._make_state_db(td, [])
+
+            result = mine_module.mine_unused_skills(
+                skills_dir, state_db,
+                Path(td) / "profiles",
+                hooks_dir,
+                Path(td) / "scripts",
+                Path(td) / "boards",
+            )
+
+        unused_names = {s["name"] for s in result["skills"]}
+        self.assertNotIn("alpha", unused_names)
+        self.assertIn("beta", unused_names)
+
+    def test_reference_in_script_excludes(self):
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = self._make_skills_dir(td, {
+                "alpha": "Alpha skill",
+                "beta": "Beta skill",
+            })
+            scripts_dir = Path(td) / "scripts"
+            scripts_dir.mkdir()
+            (scripts_dir / "test.py").write_text("# uses alpha")
+            state_db = self._make_state_db(td, [])
+
+            result = mine_module.mine_unused_skills(
+                skills_dir, state_db,
+                Path(td) / "profiles",
+                Path(td) / "hooks",
+                scripts_dir,
+                Path(td) / "boards",
+            )
+
+        unused_names = {s["name"] for s in result["skills"]}
+        self.assertNotIn("alpha", unused_names)
+        self.assertIn("beta", unused_names)
+
+    def test_kanban_skills_pin_excludes(self):
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = self._make_skills_dir(td, {
+                "alpha": "Alpha skill",
+                "beta": "Beta skill",
+            })
+            boards_dir = Path(td) / "boards"
+            board_dir = boards_dir / "test"
+            board_dir.mkdir(parents=True)
+            db_path = board_dir / "kanban.db"
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    body TEXT,
+                    assignee TEXT,
+                    status TEXT,
+                    skills TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO tasks (id, title, status, skills) VALUES (?, ?, ?, ?)",
+                ("t1", "test", "running", json.dumps(["alpha"])),
+            )
+            conn.commit()
+            conn.close()
+            state_db = self._make_state_db(td, [])
+
+            result = mine_module.mine_unused_skills(
+                skills_dir, state_db,
+                Path(td) / "profiles",
+                Path(td) / "hooks",
+                Path(td) / "scripts",
+                boards_dir,
+            )
+
+        unused_names = {s["name"] for s in result["skills"]}
+        self.assertNotIn("alpha", unused_names)
+        self.assertIn("beta", unused_names)
+
+    def test_profile_db_aggregation(self):
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = self._make_skills_dir(td, {
+                "alpha": "Alpha skill",
+                "beta": "Beta skill",
+            })
+            state_db = self._make_state_db(td, [])
+            profiles_dir = Path(td) / "profiles"
+            profile_dir = profiles_dir / "test"
+            profile_dir.mkdir(parents=True)
+            profile_db = profile_dir / "state.db"
+            conn = sqlite3.connect(profile_db)
+            conn.execute(
+                """
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT,
+                    tool_call_id TEXT,
+                    tool_calls TEXT,
+                    tool_name TEXT,
+                    _compressed_summary INTEGER NOT NULL DEFAULT 0,
+                    timestamp REAL DEFAULT 0
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO messages (id, session_id, role, tool_calls) VALUES (?, ?, 'assistant', ?)",
+                (1, "s1", json.dumps([{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "skill_view", "arguments": '{"name": "alpha"}'},
+                }])),
+            )
+            conn.commit()
+            conn.close()
+
+            result = mine_module.mine_unused_skills(
+                skills_dir, state_db,
+                profiles_dir,
+                Path(td) / "hooks",
+                Path(td) / "scripts",
+                Path(td) / "boards",
+            )
+
+        unused_names = {s["name"] for s in result["skills"]}
+        self.assertNotIn("alpha", unused_names)
+        self.assertIn("beta", unused_names)
+
+    def test_keep_list_skips_prune(self):
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = self._make_skills_dir(td, {
+                "alpha": "Alpha skill",
+            })
+            state_db = self._make_state_db(td, [])
+
+            # Temporarily add alpha to KEEP_LIST
+            original_keep = set(mine_module.KEEP_LIST)
+            mine_module.KEEP_LIST.add("alpha")
+            try:
+                result = mine_module.mine_unused_skills(
+                    skills_dir, state_db,
+                    Path(td) / "profiles",
+                    Path(td) / "hooks",
+                    Path(td) / "scripts",
+                    Path(td) / "boards",
+                )
+            finally:
+                mine_module.KEEP_LIST.clear()
+                mine_module.KEEP_LIST.update(original_keep)
+
+        unused_names = {s["name"] for s in result["skills"]}
+        self.assertNotIn("alpha", unused_names)
+        keep_names = {k["name"] for k in result["keep_list"]}
+        self.assertIn("alpha", keep_names)
+
+    def test_counts_and_costs(self):
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = self._make_skills_dir(td, {
+                "alpha": "Alpha skill",
+                "beta": "Beta skill",
+            })
+            state_db = self._make_state_db(td, [])
+
+            result = mine_module.mine_unused_skills(
+                skills_dir, state_db,
+                Path(td) / "profiles",
+                Path(td) / "hooks",
+                Path(td) / "scripts",
+                Path(td) / "boards",
+            )
+
+        self.assertEqual(result["total_skills"], 2)
+        self.assertEqual(result["never_used_count"], 2)
+        self.assertEqual(result["used_count"], 0)
+        self.assertTrue(result["total_catalog_cost"] > 0)
+        self.assertTrue(result["never_used_cost"] > 0)
+
+
 if __name__ == "__main__":
     unittest.main()

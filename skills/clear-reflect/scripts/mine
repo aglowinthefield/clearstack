@@ -16,8 +16,20 @@ from pathlib import Path
 
 DEFAULT_STATE_DB = Path.home() / ".hermes" / "state.db"
 DEFAULT_RUNS_LOG = Path.home() / ".local" / "state" / "clearstack" / "runs.jsonl"
+DEFAULT_SKILLS_DIR = Path.home() / ".hermes" / "skills"
+DEFAULT_AGENT_HOOKS_DIR = Path.home() / ".hermes" / "agent-hooks"
+DEFAULT_SCRIPTS_DIR = Path.home() / ".hermes" / "scripts"
+DEFAULT_KANBAN_BOARDS_DIR = Path.home() / ".hermes" / "kanban" / "boards"
 SIZE_THRESHOLD = 20000
 REPEAT_MIN_COUNT = 3
+
+# Seasonal or project-bound skills the detector reports but marks keep.
+# Edit this list in place; the detector proposes, never uninstalls.
+KEEP_LIST = {
+    "weekly-review-planning",
+    "retro",
+    "workday-activity-review",
+}
 
 
 def connect_db(path):
@@ -248,7 +260,271 @@ def mine_repeats(conn, min_count=REPEAT_MIN_COUNT):
     return findings
 
 
-def emit_summary(oversized, repeats):
+# ---------------------------------------------------------------------------
+# Unused-skills detector
+# ---------------------------------------------------------------------------
+
+def parse_skill_frontmatter(text):
+    """Extract name and description from SKILL.md frontmatter.
+
+    Returns (name, description) or (None, None) on failure.
+    """
+    if not text.startswith("---"):
+        return None, None
+    end = text.find("---", 3)
+    if end == -1:
+        return None, None
+    frontmatter = text[3:end].strip()
+    name = None
+    description = None
+    for line in frontmatter.splitlines():
+        line = line.rstrip()
+        if line.startswith("name:"):
+            name = line.split(":", 1)[1].strip().strip('"').strip("'")
+        elif line.startswith("description:"):
+            description = line.split(":", 1)[1].strip().strip('"').strip("'")
+    return name, description
+
+
+def enumerate_skills(skills_dir):
+    """Return a dict of skill_name -> {"path": Path, "catalog_cost": int}."""
+    skills = {}
+    if not skills_dir.exists():
+        return skills
+    for skill_md in skills_dir.rglob("SKILL.md"):
+        text = skill_md.read_text(encoding="utf-8")
+        name, description = parse_skill_frontmatter(text)
+        if name:
+            cost = len(name) + len(description or "")
+            skills[name] = {
+                "path": str(skill_md),
+                "catalog_cost": cost,
+            }
+    return skills
+
+
+def _skill_names_from_tool_calls(tool_calls_json, skills_dir):
+    """Return a set of skill names referenced in tool_calls."""
+    used = set()
+    home = str(Path.home())
+    skills_dir_str = str(skills_dir)
+    for _, tool_name, args in parse_tool_calls(tool_calls_json):
+        if tool_name in ("skill_view", "skill_manage"):
+            if isinstance(args, dict):
+                if tool_name == "skill_view":
+                    name = args.get("name")
+                    if name:
+                        used.add(name)
+                elif tool_name == "skill_manage":
+                    ops = args.get("operations", [])
+                    if isinstance(ops, list):
+                        for op in ops:
+                            if isinstance(op, dict):
+                                name = op.get("name")
+                                if name:
+                                    used.add(name)
+        elif tool_name in ("read_file", "patch", "search_files"):
+            if isinstance(args, dict):
+                path = args.get("path", "")
+                if path:
+                    resolved = str(Path(path).expanduser().resolve())
+                    if resolved.startswith(skills_dir_str):
+                        # Extract skill name from path: .../skills/<name>/SKILL.md or subdirectory
+                        rel = Path(resolved).relative_to(skills_dir_str)
+                        parts = rel.parts
+                        if parts:
+                            used.add(parts[0])
+        elif tool_name == "write_file":
+            if isinstance(args, dict):
+                path = args.get("path", "")
+                if path:
+                    resolved = str(Path(path).expanduser().resolve())
+                    if resolved.startswith(skills_dir_str):
+                        rel = Path(resolved).relative_to(skills_dir_str)
+                        parts = rel.parts
+                        if parts:
+                            used.add(parts[0])
+    return used
+
+
+def _collect_used_skills_from_db(db_path, skills_dir):
+    """Return a set of skill names used in a single state db."""
+    used = set()
+    conn, _ = connect_db(db_path)
+    if conn is None:
+        return used
+    try:
+        cur = conn.execute(
+            """
+            SELECT tool_calls FROM messages
+            WHERE role = 'assistant' AND tool_calls IS NOT NULL
+            """
+        )
+        for row in cur:
+            used |= _skill_names_from_tool_calls(row["tool_calls"], skills_dir)
+    finally:
+        conn.close()
+    return used
+
+
+def _collect_referenced_skills_from_hooks(hooks_dir):
+    """Return a set of skill names mentioned in agent-hooks files."""
+    referenced = set()
+    if not hooks_dir.exists():
+        return referenced
+    for path in hooks_dir.iterdir():
+        if path.is_file() and not path.name.startswith("."):
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except (OSError, UnicodeDecodeError):
+                continue
+            # We will match skill names against this text later.
+            # For now, just store the text; the caller has the skill list.
+            referenced.add(("hook", path.name, text))
+    return referenced
+
+
+def _collect_referenced_skills_from_scripts(scripts_dir):
+    """Return a set of skill names mentioned in scripts files."""
+    referenced = set()
+    if not scripts_dir.exists():
+        return referenced
+    for path in scripts_dir.iterdir():
+        if path.is_file() and not path.name.startswith("."):
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except (OSError, UnicodeDecodeError):
+                continue
+            referenced.add(("script", path.name, text))
+    return referenced
+
+
+def _collect_referenced_skills_from_boards(boards_dir):
+    """Return a set of skill names pinned in kanban card skills columns."""
+    referenced = set()
+    if not boards_dir.exists():
+        return referenced
+    for board_path in boards_dir.iterdir():
+        db_file = board_path / "kanban.db"
+        if not db_file.exists():
+            continue
+        conn, _ = connect_db(db_file)
+        if conn is None:
+            continue
+        try:
+            cur = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'"
+            )
+            if not cur.fetchone():
+                continue
+            cur = conn.execute("SELECT skills FROM tasks WHERE skills IS NOT NULL")
+            for row in cur:
+                try:
+                    skills = json.loads(row["skills"])
+                    if isinstance(skills, list):
+                        for name in skills:
+                            if isinstance(name, str):
+                                referenced.add(name)
+                except (ValueError, TypeError):
+                    pass
+        finally:
+            conn.close()
+    return referenced
+
+
+def mine_unused_skills(
+    skills_dir,
+    state_db_path,
+    profile_dbs_dir,
+    agent_hooks_dir,
+    scripts_dir,
+    boards_dir,
+):
+    """Find installed skills that are neither used nor referenced."""
+    skills = enumerate_skills(skills_dir)
+    if not skills:
+        return {
+            "total_skills": 0,
+            "used_count": 0,
+            "referenced_count": 0,
+            "never_used_count": 0,
+            "total_catalog_cost": 0,
+            "never_used_cost": 0,
+            "skills": [],
+            "note": f"no skills found in {skills_dir}",
+        }
+
+    used = _collect_used_skills_from_db(state_db_path, skills_dir)
+
+    # Aggregate profile dbs
+    if profile_dbs_dir.exists():
+        for profile_dir in profile_dbs_dir.iterdir():
+            profile_db = profile_dir / "state.db"
+            if profile_db.exists():
+                used |= _collect_used_skills_from_db(profile_db, skills_dir)
+
+    # Reference signals
+    referenced = set()
+    hook_refs = _collect_referenced_skills_from_hooks(agent_hooks_dir)
+    script_refs = _collect_referenced_skills_from_scripts(scripts_dir)
+    board_refs = _collect_referenced_skills_from_boards(boards_dir)
+
+    # Match skill names against hook/script text
+    all_skill_names = set(skills.keys())
+    for _, _, text in hook_refs:
+        for name in all_skill_names:
+            if name in text:
+                referenced.add(name)
+    for _, _, text in script_refs:
+        for name in all_skill_names:
+            if name in text:
+                referenced.add(name)
+    referenced |= board_refs
+
+    never_used = []
+    total_cost = sum(s["catalog_cost"] for s in skills.values())
+    never_used_cost = 0
+
+    for name, info in sorted(skills.items(), key=lambda x: x[1]["catalog_cost"], reverse=True):
+        is_used = name in used
+        is_referenced = name in referenced
+        is_keep = name in KEEP_LIST
+        if not is_used and not is_referenced and not is_keep:
+            never_used.append({
+                "name": name,
+                "catalog_cost": info["catalog_cost"],
+                "path": info["path"],
+            })
+            never_used_cost += info["catalog_cost"]
+
+    # Keep-list items are reported separately so they stay visible
+    keep_items = []
+    for name in sorted(KEEP_LIST):
+        if name in skills:
+            keep_items.append({
+                "name": name,
+                "catalog_cost": skills[name]["catalog_cost"],
+            })
+
+    return {
+        "total_skills": len(skills),
+        "used_count": len(used & all_skill_names),
+        "referenced_count": len(referenced & all_skill_names),
+        "keep_count": len(keep_items),
+        "never_used_count": len(never_used),
+        "total_catalog_cost": total_cost,
+        "never_used_cost": never_used_cost,
+        "skills": never_used,
+        "keep_list": keep_items,
+        "note": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Reporting
+# ---------------------------------------------------------------------------
+
+def emit_summary(oversized, repeats, unused):
     """Return a short human-readable summary string."""
     lines = []
     lines.append(
@@ -274,17 +550,35 @@ def emit_summary(oversized, repeats):
     if len(repeats) > 10:
         lines.append(f"  ... and {len(repeats) - 10} more")
 
+    lines.append("")
+    note = unused.get("note")
+    if note:
+        lines.append(f"Unused skills: {note}")
+    else:
+        lines.append(
+            f"Unused skills: {unused['never_used_count']} of {unused['total_skills']} "
+            f"({unused['never_used_cost']:,} / {unused['total_catalog_cost']:,} catalog chars)"
+        )
+        for s in unused["skills"][:10]:
+            lines.append(f"  {s['name']} — {s['catalog_cost']:,} chars")
+        if len(unused["skills"]) > 10:
+            lines.append(f"  ... and {len(unused['skills']) - 10} more")
+        if unused["keep_list"]:
+            lines.append(f"  keep list: {', '.join(k['name'] for k in unused['keep_list'])}")
+
     return "\n".join(lines)
 
 
-def mine(state_db_path, runs_path):
-    """Run both detectors and return the full report dict."""
+def mine(state_db_path, runs_path, skills_dir=None, agent_hooks_dir=None,
+         scripts_dir=None, boards_dir=None, profile_dbs_dir=None):
+    """Run all detectors and return the full report dict."""
     report = {
         "generated_at": None,
         "sources": {},
         "findings": {
             "oversized_results": [],
             "repeated_commands": [],
+            "unused_skills": {},
         },
         "summary": "",
     }
@@ -305,9 +599,25 @@ def mine(state_db_path, runs_path):
     else:
         report["sources"]["runs_jsonl"] = {"path": str(runs_path), "note": "not found"}
 
+    skills_dir = skills_dir or DEFAULT_SKILLS_DIR
+    agent_hooks_dir = agent_hooks_dir or DEFAULT_AGENT_HOOKS_DIR
+    scripts_dir = scripts_dir or DEFAULT_SCRIPTS_DIR
+    boards_dir = boards_dir or DEFAULT_KANBAN_BOARDS_DIR
+    profile_dbs_dir = profile_dbs_dir or (Path.home() / ".hermes" / "profiles")
+
+    report["findings"]["unused_skills"] = mine_unused_skills(
+        skills_dir,
+        state_db_path,
+        profile_dbs_dir,
+        agent_hooks_dir,
+        scripts_dir,
+        boards_dir,
+    )
+
     report["summary"] = emit_summary(
         report["findings"]["oversized_results"],
         report["findings"]["repeated_commands"],
+        report["findings"]["unused_skills"],
     )
     return report
 
@@ -330,6 +640,30 @@ def main():
         help="Path to clearstack runs.jsonl",
     )
     parser.add_argument(
+        "--skills-dir",
+        type=Path,
+        default=DEFAULT_SKILLS_DIR,
+        help="Path to Hermes skills directory",
+    )
+    parser.add_argument(
+        "--agent-hooks-dir",
+        type=Path,
+        default=DEFAULT_AGENT_HOOKS_DIR,
+        help="Path to agent-hooks directory",
+    )
+    parser.add_argument(
+        "--scripts-dir",
+        type=Path,
+        default=DEFAULT_SCRIPTS_DIR,
+        help="Path to scripts directory",
+    )
+    parser.add_argument(
+        "--boards-dir",
+        type=Path,
+        default=DEFAULT_KANBAN_BOARDS_DIR,
+        help="Path to kanban boards directory",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         help="Write output to this file",
@@ -342,7 +676,14 @@ def main():
     )
     args = parser.parse_args()
 
-    report = mine(args.db, args.runs)
+    report = mine(
+        args.db,
+        args.runs,
+        skills_dir=args.skills_dir,
+        agent_hooks_dir=args.agent_hooks_dir,
+        scripts_dir=args.scripts_dir,
+        boards_dir=args.boards_dir,
+    )
     report["generated_at"] = datetime.now(timezone.utc).isoformat()
 
     if args.format in ("json", "both"):

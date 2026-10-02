@@ -41,6 +41,10 @@ Flag tool results over 20K chars, grouped by tool name and command shape, so a g
 
 Flag the same normalized command run 3+ times in one session. When the repeats span a compaction event (a `_compressed_summary` message in the same session), they are flagged as compaction-adjacent: the signature of post-compaction state loss.
 
+### Unused skills
+
+Flag installed skills that never appear in tool-call history (`skill_view`, `skill_manage`, `read_file`/`patch`/`search_files`/`write_file` under a skills directory) across the default state db and every profile state db, and are not referenced by agent-hooks, scripts, or kanban card `skills` pins. Reports per-skill catalog cost (name plus description length) and total cost so the operator sees prune candidates. A keep-list inside the mine script marks seasonal skills as keep-only; the detector proposes, never uninstalls.
+
 ## On each finding
 
 1. Read the report and the affected session or run record.
