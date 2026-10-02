@@ -20,23 +20,18 @@ The repo's `AGENTS.md` or `CLAUDE.md` and the operator's instructions win wherev
 
 ## Every run
 
-1. **Open the run record.** From this skill's directory, run `scripts/record start --task "<the task in one line>" --playbook <name or none>` and keep the printed run id. Done when you hold an id.
-2. **Pick principles and playbooks.** Read the index below and open each principle file, and any playbook that applies, before you act on it. Done when every principle and playbook you rely on has been read this session.
-3. **Work to done autonomously.** See **Autonomy**. Add `--trailer "Clear-Run: <id>"` to every commit the run makes. Log each non-obvious decision with `scripts/record note <id> "<decision, alternatives, why>"`. When the operator's request or the open question changes, a follow-up redirects the work, you finish one sub-goal and move to the next, or you are blocked on a specific decision, call `scripts/record focus <id> "<the current request or question, one line>"` so a long run's goal stays visible instead of buried under the output since it was last stated.
-4. **Close the run record.** Run `scripts/record end <id> --status done|parked|abandoned`, with one `--verified "<claim>: <evidence>"` per proven claim, one `--unverified "<claim>"` per claim you could not prove, `--needs "<decision>"` when parked, and `--pr` when there is one. Done when every claim your reply will make appears in the record as verified or unverified.
-5. **Reply.** Report each state separately (see **separate-the-states**), put evidence beside each claim, and name each principle that changed a decision and the decision it changed. Write the reply, commit messages, PR bodies, and record notes in the `clear-voice` style.
+See [`references/every-run.md`](references/every-run.md) for the full steps. In brief:
+
+1. **Open the run record.** Run `scripts/record start`. Done when you hold an id.
+2. **Pick principles and playbooks.** Open each file you rely on before you act on it. Done when every one has been read this session.
+3. **Work to done autonomously.** See [`references/autonomy.md`](references/autonomy.md). Done when a stop condition holds.
+4. **Resume after compaction if needed.** Run `scripts/record resume <id>` after a compaction handoff. Treat verified claims as already proven.
+5. **Close the run record.** Run `scripts/record end`. Done when every claim is recorded.
+6. **Reply.** Report each state separately, with evidence, in the `clear-voice` style.
 
 ## Autonomy
 
-Proceed on reversible work without asking, and let the operator correct course from the result. Stop and hand back only when one of these holds:
-
-1. The next action is irreversible or reaches outside the workspace (merge, deploy, publish, message someone, delete work you did not create), and neither the repo nor the operator has granted it.
-2. A product or preference call remains that no experiment can settle (see **experiment-before-asking**).
-3. Two fixes that share one premise have failed the same check. Report the premise instead of writing a third fix built on it.
-4. The work needs access you do not have: credentials, a device, an environment.
-5. The done condition is met and proven.
-
-On stops 1 to 4, park the work: leave it committed on a branch where the repo allows, write a handoff note (see **leave-context-behind**), end the record as `parked`, and name the single decision you need.
+See [`references/autonomy.md`](references/autonomy.md). In brief: proceed on reversible work without asking. Stop and hand back when the next action is irreversible, a product call remains, two fixes sharing one premise have failed, access is missing, or the work is done.
 
 ## Unattended
 
@@ -69,6 +64,7 @@ Each file in `references/principles/` gives the rule, when it applies, the decis
 **Maintenance**
 - `less-code`: sizing a change or adding a file, dependency, flag, or abstraction.
 - `guards-over-reminders`: something went wrong, or an instruction is being written a second time.
+- `budget-the-context`: adding to a skill, writing a long run, or loading detail that only one step needs.
 
 **Repairability**
 - `fix-at-the-right-layer`: debugging, or the same fix is about to land in a second place.

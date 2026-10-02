@@ -87,7 +87,7 @@ Each principle is one short file in [`skills/clear-mode/references/principles/`]
 | Context | [leave-context-behind](skills/clear-mode/references/principles/leave-context-behind.md), [load-context-deliberately](skills/clear-mode/references/principles/load-context-deliberately.md) |
 | Observation | [separate-the-states](skills/clear-mode/references/principles/separate-the-states.md), [claims-carry-evidence](skills/clear-mode/references/principles/claims-carry-evidence.md), [record-dont-grade](skills/clear-mode/references/principles/record-dont-grade.md), [prove-on-the-real-artifact](skills/clear-mode/references/principles/prove-on-the-real-artifact.md), [ship-what-you-verified](skills/clear-mode/references/principles/ship-what-you-verified.md) |
 | Comprehension | [model-the-domain](skills/clear-mode/references/principles/model-the-domain.md), [test-behavior](skills/clear-mode/references/principles/test-behavior.md), [minimize-reader-load](skills/clear-mode/references/principles/minimize-reader-load.md) |
-| Maintenance | [less-code](skills/clear-mode/references/principles/less-code.md), [guards-over-reminders](skills/clear-mode/references/principles/guards-over-reminders.md) |
+| Maintenance | [less-code](skills/clear-mode/references/principles/less-code.md), [guards-over-reminders](skills/clear-mode/references/principles/guards-over-reminders.md), [budget-the-context](skills/clear-mode/references/principles/budget-the-context.md) |
 | Repairability | [fix-at-the-right-layer](skills/clear-mode/references/principles/fix-at-the-right-layer.md), [fail-loudly-and-locally](skills/clear-mode/references/principles/fail-loudly-and-locally.md), [prefer-reversible-changes](skills/clear-mode/references/principles/prefer-reversible-changes.md) |
 | Mutability | [experiment-before-asking](skills/clear-mode/references/principles/experiment-before-asking.md) |
 
@@ -138,7 +138,7 @@ The dashboard should also preserve the user's original request and pending decis
 | 2 | Playbooks: investigate, bug-fix, feature, review, pickup/handoff | merged |
 | 2b | Playbook: ship | planned |
 | 3 | `clear-stats`: outcomes, claim vs proof, rework, corrections, and cost across Claude Code, Codex, Hermes, and GitHub | planned |
-| 4 | `clear-reflect`: mine transcripts for repeated corrections and repeated tool-call chains, and propose principles, guards, or scripts | planned |
+| 4 | `clear-reflect`: mine transcripts for repeated corrections and repeated tool-call chains, and propose principles, guards, or scripts | merged |
 | 5 | Local dashboard: read-only view of run records | in progress; telemetry now reads from the harness session log when available |
 
 ## Develop
