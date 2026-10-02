@@ -10,6 +10,8 @@ from pathlib import Path
 import time
 from urllib.parse import parse_qs, urlsplit
 
+from clearstack.token_view import render_tokens_page
+
 
 def default_log_path():
     state_home = os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state"
@@ -517,7 +519,7 @@ ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}
 @media(max-width:860px){{.columns{{grid-template-columns:1fr}}}}
 </style></head><body><main>
 <header class=glass><div><p class=brand>ClearStack / local run log</p><h1>Runs</h1></div>
-<div class=head-right><span class=live id=live><span class=live-dot></span><span id=live-label>live</span></span>
+<div class=head-right><a class=back href="/tokens">Token spend</a><span class=live id=live><span class=live-dot></span><span id=live-label>live</span></span>
 <span class=local>{escape(bind_host)}</span></div></header>
 <div class="summary glass"><div class=metric><strong>{len(runs)}</strong><span>runs</span></div>
 <div class=metric><strong>{counts['open']}</strong><span>open</span></div><div class=metric><strong>{counts['done']}</strong><span>done</span></div>
@@ -603,6 +605,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if request.path == "/events":
             self._serve_events()
             return
+        if request.path == "/tokens":
+            self._serve_tokens()
+            return
         if request.path != "/":
             self.send_error(404)
             return
@@ -621,6 +626,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_tokens(self):
+        page = render_tokens_page(bind_host=self.bind_host)
+        body = page.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        )
         self.end_headers()
         self.wfile.write(body)
 
