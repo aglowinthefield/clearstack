@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Weekly clear-reflect watch: run the mining script and emit its human summary."""
+
+import subprocess
+import sys
+from pathlib import Path
+
+MINE = Path(__file__).with_name("mine").resolve()
+
+
+def main():
+    result = subprocess.run(
+        [sys.executable, str(MINE), "--format", "summary"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(
+            f"clear-reflect mine failed (exit {result.returncode}):",
+            file=sys.stderr,
+        )
+        print(result.stderr, file=sys.stderr)
+        sys.exit(result.returncode)
+    # stdout is the human summary; deliver it verbatim
+    print(result.stdout, end="")
+
+
+if __name__ == "__main__":
+    main()

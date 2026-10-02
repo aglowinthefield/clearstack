@@ -128,6 +128,23 @@ The `/tokens` route shows a token-spend analytics view computed from `~/.hermes/
 
 The dashboard should also preserve the user's original request and pending decisions through long agent output, so the current goal does not get buried. This first version reads run records only and does not capture conversation text.
 
+## Clear reflect
+
+`clear-reflect` mines agent history for repeated waste and proposes guards, never applying them automatically. A weekly cron job runs the mining pass every Monday at 08:00 and delivers the human summary to the operator's chat.
+
+```bash
+# Run on demand
+skills/clear-reflect/scripts/mine
+
+# Pause the weekly job
+hermes cron pause clear-reflect
+
+# Resume
+hermes cron resume clear-reflect
+```
+
+Run with `--format json` for machine-readable output, or `--format summary` for the human text only.
+
 ## Status
 
 | | Piece | State |
