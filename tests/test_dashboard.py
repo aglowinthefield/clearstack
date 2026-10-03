@@ -252,7 +252,7 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("Spawned by", detail)
         self.assertIn("parent task", detail)
         self.assertIn("Self-reported by delegate_task", detail)
-        self.assertIn("not verified evidence", detail)
+        self.assertIn("unverified", detail)
 
     def test_detail_lists_child_runs_for_a_parent(self):
         self.write_events(
@@ -292,6 +292,105 @@ class DashboardTest(unittest.TestCase):
     def test_status_mix_empty_with_no_runs(self):
         page = render_page(load_runs(self.log))
         self.assertNotIn("<div class=status-mix>", page)
+
+    def test_parent_detail_shows_accepted_badge_for_confirmed_child(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "parent1", "task": "parent task", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "start", "run": "child1", "task": "child task",
+             "agent": "hermes", "parent_run_id": "parent1", "spawned_by": "delegate_task"},
+            {"ts": "2026-10-01T10:02:00+00:00", "event": "end", "run": "child1", "status": "done", "verified": [], "unverified": []},
+            {"ts": "2026-10-01T10:03:00+00:00", "event": "confirm", "run": "parent1", "child_run": "child1",
+             "status": "accepted", "reason": "reviewed and correct"},
+        )
+
+        detail = render_page(load_runs(self.log), selected_id="parent1")
+
+        self.assertIn("Subagents (1)", detail)
+        self.assertIn("accepted", detail)
+        self.assertIn("confirm-accepted", detail)
+
+    def test_parent_detail_shows_rejected_badge_for_rejected_child(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "parent1", "task": "parent task", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "start", "run": "child1", "task": "child task",
+             "agent": "hermes", "parent_run_id": "parent1", "spawned_by": "delegate_task"},
+            {"ts": "2026-10-01T10:02:00+00:00", "event": "end", "run": "child1", "status": "done", "verified": [], "unverified": []},
+            {"ts": "2026-10-01T10:03:00+00:00", "event": "confirm", "run": "parent1", "child_run": "child1",
+             "status": "rejected", "reason": "missed edge case"},
+        )
+
+        detail = render_page(load_runs(self.log), selected_id="parent1")
+
+        self.assertIn("rejected", detail)
+        self.assertIn("confirm-rejected", detail)
+
+    def test_child_detail_shows_accepted_banner_when_confirmed(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "parent1", "task": "parent task", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "start", "run": "child1", "task": "child task",
+             "agent": "hermes", "parent_run_id": "parent1", "spawned_by": "delegate_task"},
+            {"ts": "2026-10-01T10:02:00+00:00", "event": "confirm", "run": "parent1", "child_run": "child1",
+             "status": "accepted"},
+        )
+
+        detail = render_page(load_runs(self.log), selected_id="child1")
+
+        self.assertIn("Parent reviewed and", detail)
+        self.assertIn("accepted", detail)
+        self.assertNotIn("Self-reported by", detail)
+
+    def test_child_detail_shows_rejected_banner_with_reason_when_rejected(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "parent1", "task": "parent task", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "start", "run": "child1", "task": "child task",
+             "agent": "hermes", "parent_run_id": "parent1", "spawned_by": "delegate_task"},
+            {"ts": "2026-10-01T10:02:00+00:00", "event": "confirm", "run": "parent1", "child_run": "child1",
+             "status": "rejected", "reason": "broke the build"},
+        )
+
+        detail = render_page(load_runs(self.log), selected_id="child1")
+
+        self.assertIn("Parent", detail)
+        self.assertIn("rejected", detail)
+        self.assertIn("broke the build", detail)
+
+    def test_child_detail_shows_unverified_banner_when_no_confirmation(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "parent1", "task": "parent task", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "start", "run": "child1", "task": "child task",
+             "agent": "hermes", "parent_run_id": "parent1", "spawned_by": "delegate_task"},
+        )
+
+        detail = render_page(load_runs(self.log), selected_id="child1")
+
+        self.assertIn("unverified", detail)
+        self.assertIn("confirms or rejects", detail)
+
+    def test_child_detail_defaults_to_unverified_badge_for_unverified_confirmation(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "parent1", "task": "parent task", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "start", "run": "child1", "task": "child task",
+             "agent": "hermes", "parent_run_id": "parent1", "spawned_by": "delegate_task"},
+            {"ts": "2026-10-01T10:02:00+00:00", "event": "confirm", "run": "parent1", "child_run": "child1",
+             "status": "unverified"},
+        )
+
+        detail = render_page(load_runs(self.log), selected_id="child1")
+
+        self.assertIn("unverified", detail)
+        self.assertIn("confirms or rejects", detail)
+
+    def test_unknown_child_confirmation_is_ignored_in_parent_detail(self):
+        self.write_events(
+            {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "parent1", "task": "parent task", "agent": "hermes"},
+            {"ts": "2026-10-01T10:01:00+00:00", "event": "confirm", "run": "parent1", "child_run": "does-not-exist",
+             "status": "accepted"},
+        )
+
+        detail = render_page(load_runs(self.log), selected_id="parent1")
+
+        # Should not crash; no children section since child does not exist
+        self.assertNotIn("Subagents", detail)
 
 
 class SSETest(unittest.TestCase):

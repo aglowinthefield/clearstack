@@ -146,6 +146,30 @@ class RecordTest(unittest.TestCase):
         self.assertIn("... (truncated)", result.stdout)
         self.assertLessEqual(len(result.stdout), 520)
 
+    def test_confirm_writes_event_with_status_and_reason(self):
+        parent_id = self.run_record("start", "--task", "parent").stdout.strip()
+        child_id = self.run_record("start", "--task", "child", "--parent-run", parent_id).stdout.strip()
+        self.run_record("confirm", parent_id, child_id, "--status", "accepted", "--reason", "tests passed")
+
+        log = self.log()
+        confirm = next(e for e in log if e["event"] == "confirm")
+        self.assertEqual(confirm["run"], parent_id)
+        self.assertEqual(confirm["child_run"], child_id)
+        self.assertEqual(confirm["status"], "accepted")
+        self.assertEqual(confirm["reason"], "tests passed")
+
+    def test_confirm_requires_existing_parent_run(self):
+        child_id = self.run_record("start", "--task", "child").stdout.strip()
+        result = self.run_record("confirm", "cr-19700101-000000", child_id, "--status", "accepted")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no run", result.stderr)
+
+    def test_confirm_requires_existing_child_run(self):
+        parent_id = self.run_record("start", "--task", "parent").stdout.strip()
+        result = self.run_record("confirm", parent_id, "cr-19700101-000000", "--status", "accepted")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no run", result.stderr)
+
     def test_two_sequential_runs_in_one_session_each_get_their_own_delta(self):
         import sqlite3
         db_path = Path(self.state.name) / "state.db"

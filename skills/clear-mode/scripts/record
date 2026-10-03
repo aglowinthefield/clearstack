@@ -456,6 +456,18 @@ def end(args):
     })
 
 
+def confirm(args):
+    require_run(args.parent_run)
+    require_run(args.child_run)
+    append({
+        "event": "confirm",
+        "run": args.parent_run,
+        "child_run": args.child_run,
+        "status": args.status,
+        "reason": args.reason,
+    })
+
+
 def main():
     parser = argparse.ArgumentParser(prog="record", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(required=True)
@@ -492,6 +504,14 @@ def main():
     p.add_argument("run")
     p.add_argument("--limit", type=int, default=2048, help="max chars (truncates with ellipsis)")
     p.set_defaults(func=resume)
+
+    p = sub.add_parser("confirm", help="record a parent-run decision about a child run")
+    p.add_argument("parent_run", help="the run id that is making the decision")
+    p.add_argument("child_run", help="the run id being confirmed or rejected")
+    p.add_argument("--status", required=True, choices=["accepted", "rejected", "unverified"],
+                   help="the parent's verdict on the child's self-reported result")
+    p.add_argument("--reason", help="optional explanation for the decision")
+    p.set_defaults(func=confirm)
 
     args = parser.parse_args()
     args.func(args)

@@ -190,7 +190,13 @@ def _focus_callout(run):
             f"<strong>Current focus</strong><p>{escape(str(focus))}</p></div>")
 
 
-def _detail(run, runs_by_id):
+def _confirm_badge(status):
+    css = f"confirm-{escape(str(status))}"
+    return f'<span class="confirm-badge {css}">{escape(str(status))}</span>'
+
+
+def _detail(run, runs_by_id, confirmations=None):
+    confirmations = confirmations or {}
     start = run["start"]
     end = run["end"] or {}
     notes = [event.get("text", "") for event in run["events"] if event.get("event") == "note"]
@@ -208,10 +214,12 @@ def _detail(run, runs_by_id):
         items = "".join(
             f'<li><a href="/?run={escape(c["id"], quote=True)}#detail">'
             f'{escape(str(c["start"].get("task") or "Untitled run"))}</a> '
-            f'<span class="status {escape(c["status"])}">{escape(c["status"])}</span></li>'
+            f'<span class="status {escape(c["status"])}">{escape(c["status"])}</span> '
+            f'{_confirm_badge(confirmations.get(c["id"], {}).get("status", "unverified"))}</li>'
             for c in children
         )
         children_html = f'<section><h3>Subagents ({len(children)})</h3><ul class=lineage-list>{items}</ul></section>'
+    child_confirmation = confirmations.get(run["id"]) if run.get("parent_run_id") else None
     return f"""<section class="detail glass" id=detail>
       <div class=detail-head><div><p class=eyebrow>RUN DETAIL</p><h2>{escape(run['id'])}</h2></div>
       <a class=back href="/">All runs</a></div>
@@ -226,7 +234,7 @@ def _detail(run, runs_by_id):
         <div><dt>Branch</dt><dd>{escape(str(start.get('branch') or '—'))}</dd></div>
         <div><dt>Commit</dt><dd><code>{escape(str(start.get('head') or '—'))}</code></dd></div>
       </dl>
-      {_subagent_banner(run)}
+      {_subagent_banner(run, child_confirmation)}
       <section><h3>Decision notes</h3><ul>{note_html}</ul></section>
       {_telemetry_section(end)}
       {_claims('Verified', end.get('verified', []))}
@@ -275,14 +283,29 @@ def _run_family(run, runs_by_id):
     return parent, children
 
 
-def _subagent_banner(run):
+def _subagent_banner(run, confirmation=None):
     if not run.get("parent_run_id"):
         return ""
     spawned_by = escape(str(run.get("spawned_by") or "a subagent"))
+    if confirmation:
+        status = confirmation.get("status", "unverified")
+        reason = confirmation.get("reason")
+        if status == "accepted":
+            text = (f"Parent reviewed and <strong>accepted</strong> this self-report. "
+                    f"Acceptance is the parent's judgment, not proof the child completed correctly.")
+        elif status == "rejected":
+            text = f"Parent <strong>rejected</strong> this self-report."
+            if reason:
+                text += f" {escape(str(reason))}"
+        else:
+            text = (f"Self-reported by {spawned_by}. This run's claims are "
+                    f"<strong>unverified</strong> until the parent run confirms or rejects them.")
+        return (f'<div class="telemetry glass subagent-banner">'
+                f"{text}</div>")
     return (f'<div class="telemetry glass subagent-banner">'
             f"<strong>Self-reported by {spawned_by}.</strong> "
-            "This run's claims are a subagent's own report, not verified evidence, "
-            "until the parent run's output confirms them.</div>")
+            "This run's claims are a subagent's own report, "
+            "<strong>unverified</strong> until the parent run confirms or rejects them.</div>")
 
 
 def _run_cost(run):
@@ -303,7 +326,20 @@ def _format_cost_cell(run):
     return f"{escape(cost_text)}<small>{escape(calls_text)}</small>" if calls_text else escape(cost_text)
 
 
-_EVENT_LABELS = {"start": "started", "note": "noted", "focus": "focus", "end": "finished"}
+_EVENT_LABELS = {"start": "started", "note": "noted", "focus": "focus", "end": "finished", "confirm": "confirmed"}
+
+
+def _confirmations_from_runs(runs):
+    """Map child_run_id -> latest confirm event for that child."""
+    confirmations = {}
+    for run in runs:
+        for event in run["events"]:
+            if event.get("event") == "confirm":
+                child_id = event.get("child_run")
+                if child_id:
+                    # Later events win; we process in log order, so just overwrite.
+                    confirmations[child_id] = event
+    return confirmations
 
 
 def _event_summary(event, task_by_run):
@@ -363,6 +399,7 @@ def render_page(runs, selected_id=None, error=None, bind_host="127.0.0.1"):
     """Render one self-contained HTML page. All run data is escaped."""
     counts = {name: sum(run["status"] == name for run in runs) for name in ("open", "done", "parked", "abandoned")}
     runs_by_id = {run["id"]: run for run in runs}
+    confirmations = _confirmations_from_runs(runs)
     selected = runs_by_id.get(selected_id) if selected_id else None
     has_telemetry = any((run["end"] or {}).get("telemetry") for run in runs if run["end"])
     total_cost = sum(c for c in (_run_cost(run) for run in runs) if isinstance(c, (int, float)))
@@ -390,7 +427,7 @@ def render_page(runs, selected_id=None, error=None, bind_host="127.0.0.1"):
         table = "<p class=empty>No runs recorded yet. Start a task with clear-mode to add one.</p>"
 
     error_html = f"<p class=error>{escape(error)}</p>" if error else ""
-    detail_html = _detail(selected, runs_by_id) if selected else ""
+    detail_html = _detail(selected, runs_by_id, confirmations) if selected else ""
     missing = f"<p class=empty>Run '{escape(selected_id)}' was not found.</p>" if selected_id and not selected else ""
     return f"""<!doctype html>
 <html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
@@ -510,7 +547,7 @@ ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}
 .lineage-list{{list-style:none;padding:0;margin:5px 0}}
 .lineage-list li{{display:flex;align-items:center;gap:8px;padding:4px 0}}
 .lineage-list a{{color:var(--ink);text-decoration:none}}.lineage-list a:hover{{color:var(--aqua-deep)}}
-.subagent-banner{{border-left-color:var(--amber)}}
+.subagent-banner{{border-left-color:var(--amber)}}.confirm-badge{{display:inline-flex;align-items:center;white-space:nowrap;font-size:10px;text-transform:capitalize;font-weight:700;padding:2px 8px;border-radius:999px;margin-left:6px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7)}}.confirm-accepted{{color:#065a3b;background:linear-gradient(180deg,rgba(255,255,255,.6),rgba(31,174,110,.22))}}.confirm-rejected{{color:#7a1f32;background:linear-gradient(180deg,rgba(255,255,255,.6),rgba(224,85,110,.22))}}.confirm-unverified{{color:#7a4f06;background:linear-gradient(180deg,rgba(255,255,255,.6),rgba(217,148,18,.22))}}
 .focus-callout{{border-left-color:var(--mint)}}.focus-callout strong{{display:block;margin-bottom:3px}}.focus-callout p{{margin:0}}
 .focus-hint{{color:var(--aqua-deep)!important;font-style:italic}}
 .activity-item.kind-focus .activity-dot{{background:var(--amber)}}
