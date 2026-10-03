@@ -567,8 +567,8 @@ class DomainFitTest(unittest.TestCase):
                 "skills": info.get("skills", []),
                 "signals": info.get("signals", []),
             }
-        import yaml
-        map_path.write_text(yaml.dump(data))
+        # JSON is valid for both PyYAML and the stdlib subset parser.
+        map_path.write_text(json.dumps(data, indent=2))
         return map_path
 
     def _make_state_db(self, td, tool_calls_rows):
@@ -838,3 +838,28 @@ class DomainFitTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class YamlSubsetLoadTest(unittest.TestCase):
+    def test_parses_the_real_domain_map(self):
+        text = (MINE.parents[3] / "skills" / "clear-reflect" / "references" / "domain-map.yaml").read_text()
+        data = mine_module._yaml_subset_load(text)
+        self.assertEqual(data["version"], 1)
+        domains = data["domains"]
+        for name in ("product", "review", "investigate", "orchestration", "infra", "home", "shared", "generalist"):
+            self.assertIn(name, domains)
+        self.assertIn("scribe", domains["product"]["profiles"])
+        self.assertIn("github", domains["product"]["skills"])
+        self.assertEqual(domains["generalist"]["skills"], [])
+        self.assertEqual(domains["generalist"]["signals"], [])
+        self.assertTrue(any("npm" in s for s in domains["product"]["signals"]))
+
+    def test_safe_load_falls_back_without_pyyaml(self):
+        text = (MINE.parents[3] / "skills" / "clear-reflect" / "references" / "domain-map.yaml").read_text()
+        saved = mine_module.yaml
+        try:
+            mine_module.yaml = None
+            data = mine_module._yaml_safe_load(text)
+        finally:
+            mine_module.yaml = saved
+        self.assertIn("domains", data)
