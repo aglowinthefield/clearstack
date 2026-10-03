@@ -83,6 +83,7 @@ Each file in `references/playbooks/` gives the trigger, principles, steps, and s
 - **Bug-fix:** [`references/playbooks/bug-fix.md`](references/playbooks/bug-fix.md). A specific, reproducible failure needs a code change.
 - **Feature:** [`references/playbooks/feature.md`](references/playbooks/feature.md). New behavior is needed and the interface is not yet fixed.
 - **Review:** [`references/playbooks/review.md`](references/playbooks/review.md). A diff or PR needs judgment before it merges.
+- **Ship:** [`skills/ship/SKILL.md`](../ship/SKILL.md). A pull request has been opened or updated and needs to reach merge.
 - **Pickup/handoff:** [`references/playbooks/pickup-handoff.md`](references/playbooks/pickup-handoff.md). A parked run or handoff note needs to be resumed.
 
 ## Harness notes

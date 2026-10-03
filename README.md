@@ -101,6 +101,7 @@ Each playbook in [`skills/clear-mode/references/playbooks/`](skills/clear-mode/r
 - **Bug-fix:** [bug-fix.md](skills/clear-mode/references/playbooks/bug-fix.md)
 - **Feature:** [feature.md](skills/clear-mode/references/playbooks/feature.md)
 - **Review:** [review.md](skills/clear-mode/references/playbooks/review.md)
+- **Ship:** [ship.md](skills/ship/SKILL.md)
 - **Pickup/handoff:** [pickup-handoff.md](skills/clear-mode/references/playbooks/pickup-handoff.md)
 
 ## Run records
@@ -155,7 +156,7 @@ Run with `--format json` for machine-readable output, or `--format summary` for 
 | 1b | `clear-voice` output style and `voice-check` | merged |
 | 1c | `clear-ci`: fail-fast CI watcher, `scripts/watch` | merged |
 | 2 | Playbooks: investigate, bug-fix, feature, review, pickup/handoff | merged |
-| 2b | Playbook: ship | planned |
+| 2b | Playbook: ship | merged |
 | 3 | `clear-stats`: outcomes, claim vs proof, rework, corrections, and cost across Claude Code, Codex, Hermes, and GitHub | planned |
 | 4 | `clear-reflect`: mine transcripts for repeated corrections and repeated tool-call chains, and propose principles, guards, or scripts | merged |
 | 5 | Local dashboard: read-only view of run records | in progress; telemetry now reads from the harness session log when available |
