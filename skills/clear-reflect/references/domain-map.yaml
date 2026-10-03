@@ -76,7 +76,6 @@ domains:
     # Decomposing and routing work. Lane exists: princess.
     profiles: [princess]
     skills:
-      - hermes-kanban
       - hermes-project-kanban
       - agent-multiplexing
       - kanban-state-reconciliation
@@ -126,18 +125,27 @@ domains:
       - '\bhermes (config|skills|plugins|cron|gateway|update)\b'
       - '~/\.hermes'
 
-  generalist:
-    # Interactive default profile. Everything unmatched lands here.
-    profiles: [default]
+  shared:
+    # Skills any profile may use without a cross-domain flag: output style,
+    # agent delegation, and interactive kanban work. The detector treats this
+    # domain as never-flagged in both directions.
+    profiles: []
     skills:
       - humanizer
-      - maps
-      - box
-      - apple-reminders
       - claude-code
       - codex
       - opencode
-      - computer-use
       - codiff
+      - computer-use
       - hermes-kanban
+      - maps
+      - box
+      - apple-reminders
+    signals: []
+
+  generalist:
+    # Interactive default profile. Owns no exclusive skills and is never
+    # flagged: roaming every domain is its job.
+    profiles: [default]
+    skills: []
     signals: []
