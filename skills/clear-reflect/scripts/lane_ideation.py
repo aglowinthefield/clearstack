@@ -157,6 +157,11 @@ def collect_sessions(db_path):
         return []
     sessions = []
     try:
+        has_sessions = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'"
+        ).fetchone()
+        if not has_sessions:
+            return []
         cur = conn.execute(
             "SELECT id FROM sessions WHERE id IS NOT NULL"
         )
