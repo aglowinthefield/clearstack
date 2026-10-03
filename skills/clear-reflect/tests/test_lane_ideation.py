@@ -186,6 +186,13 @@ class TestLaneIdeation(unittest.TestCase):
             self._insert_message(
                 sid, "assistant", self._make_terminal_call("docker ps"), 86400.0 * 8 + i * 3600.0
             )
+        # Add noise so docker is not ubiquitous
+        for i in range(5):
+            sid = f"noise-{i}"
+            self._insert_session(sid, "page")
+            self._insert_message(
+                sid, "assistant", self._make_terminal_call(f"curl {i}"), i * 3600.0
+            )
         result = li.mine_lane_ideation(self.domain_map, self.db_path, Path("/nonexistent"))
         self.assertEqual(result["candidate_count"], 1)
         c = result["candidates"][0]
@@ -207,6 +214,13 @@ class TestLaneIdeation(unittest.TestCase):
             self._insert_session(sid, "page")
             self._insert_message(
                 sid, "assistant", self._make_terminal_call("wrangler deploy"), 86400.0 * 8 + i * 3600.0
+            )
+        # Add noise so wrangler is not ubiquitous
+        for i in range(5):
+            sid = f"noise-{i}"
+            self._insert_session(sid, "page")
+            self._insert_message(
+                sid, "assistant", self._make_terminal_call(f"curl {i}"), i * 3600.0
             )
         result = li.mine_lane_ideation(self.domain_map, self.db_path, Path("/nonexistent"))
         self.assertEqual(result["candidate_count"], 1)
@@ -245,6 +259,13 @@ class TestLaneIdeation(unittest.TestCase):
             self._insert_message(
                 sid, "assistant", self._make_terminal_call("docker ps"), i * 3600.0
             )
+        # Add noise so docker is not ubiquitous
+        for i in range(5):
+            sid = f"noise-{i}"
+            self._insert_session(sid, "page")
+            self._insert_message(
+                sid, "assistant", self._make_terminal_call(f"curl {i}"), i * 3600.0
+            )
 
         result = li.mine_lane_ideation(
             self.domain_map, self.db_path, Path(self.tmpdir.name) / "profiles"
@@ -252,6 +273,69 @@ class TestLaneIdeation(unittest.TestCase):
         self.assertEqual(result["candidate_count"], 1)
         c = result["candidates"][0]
         self.assertEqual(c["session_count"], 4)
+
+    def test_stoplist_prevents_shell_noise_candidates(self):
+        """Stoplist tokens cannot become dominant signals or form clusters."""
+        for i in range(5):
+            sid = f"sess-{i}"
+            self._insert_session(sid, "page")
+            self._insert_message(
+                sid, "assistant", self._make_terminal_call("cd /tmp"), i * 86400.0 * 8
+            )
+            self._insert_message(
+                sid, "assistant", self._make_terminal_call("ls -la"), i * 86400.0 * 8 + 1
+            )
+        result = li.mine_lane_ideation(self.domain_map, self.db_path, Path("/nonexistent"))
+        self.assertEqual(result["candidate_count"], 0)
+        for c in result.get("candidates", []):
+            for sig in c["dominant_signals"]:
+                self.assertNotIn(sig, {f"bin:{x}" for x in li.SIGNAL_STOPLIST})
+
+    def test_idf_downweights_ubiquitous_signals(self):
+        """A signal present in more than half of sessions is excluded from dominance."""
+        for i in range(6):
+            sid = f"sess-{i}"
+            self._insert_session(sid, "page")
+            self._insert_message(
+                sid, "assistant", self._make_terminal_call("docker ps"), i * 86400.0 * 8
+            )
+        # Add noise so docker is in 6/11 = 55% > 0.5 (ubiquitous)
+        for i in range(5):
+            sid = f"noise-{i}"
+            self._insert_session(sid, "page")
+            self._insert_message(
+                sid, "assistant", self._make_terminal_call(f"curl {i}"), i * 3600.0
+            )
+        result = li.mine_lane_ideation(self.domain_map, self.db_path, Path("/nonexistent"))
+        # docker is ubiquitous, so no cluster should form around it
+        self.assertEqual(result["candidate_count"], 0)
+
+    def test_distinctive_cluster_still_detected(self):
+        """A signal that is enriched in a cluster but not ubiquitous is still detected."""
+        for i in range(3):
+            sid = f"w0-{i}"
+            self._insert_session(sid, "page")
+            self._insert_message(
+                sid, "assistant", self._make_terminal_call("docker ps"), i * 3600.0
+            )
+        for i in range(2):
+            sid = f"w1-{i}"
+            self._insert_session(sid, "page")
+            self._insert_message(
+                sid, "assistant", self._make_terminal_call("docker ps"), 86400.0 * 8 + i * 3600.0
+            )
+        # Noise sessions: 8 sessions with other commands
+        for i in range(8):
+            sid = f"noise-{i}"
+            self._insert_session(sid, "page")
+            self._insert_message(
+                sid, "assistant", self._make_terminal_call(f"curl {i}"), i * 3600.0
+            )
+        result = li.mine_lane_ideation(self.domain_map, self.db_path, Path("/nonexistent"))
+        self.assertEqual(result["candidate_count"], 1)
+        c = result["candidates"][0]
+        self.assertEqual(c["session_count"], 5)
+        self.assertIn("bin:docker", c["dominant_signals"])
 
 
 if __name__ == "__main__":

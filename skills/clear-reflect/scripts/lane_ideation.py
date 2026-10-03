@@ -27,6 +27,11 @@ COHERENCE_THRESHOLD = 0.5
 MIN_SESSIONS_PER_WINDOW = 1
 MAX_CLUSTER_REFINE_ITERS = 5
 
+# Signals too common to distinguish a work type
+SIGNAL_STOPLIST = frozenset({
+    "cd", "ls", "grep", "cat", "sed", "echo", "pwd", "#", "true", "set", "export"
+})
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -113,7 +118,7 @@ def extract_session_fingerprint(conn, session_id):
                     parts = cmd.split()
                     base = parts[0] if parts else ""
                     base = Path(base).name
-                    if base:
+                    if base and base not in SIGNAL_STOPLIST:
                         signals[f"bin:{base}"] += 1
             elif tool_name in ("read_file", "write_file", "patch", "search_files"):
                 path = args.get("path", "")
@@ -176,20 +181,37 @@ def collect_sessions(db_path):
 
 
 # ---------------------------------------------------------------------------
+# Signal prevalence
+# ---------------------------------------------------------------------------
+
+def compute_ubiquitous_signals(sessions, max_prevalence=0.5):
+    """Return a set of signals that appear in more than max_prevalence fraction of sessions."""
+    if not sessions:
+        return set()
+    total = len(sessions)
+    sig_counts = defaultdict(int)
+    for s in sessions:
+        for sig in s["signals"]:
+            sig_counts[sig] += 1
+    return {sig for sig, count in sig_counts.items() if count / total > max_prevalence}
+
+
+# ---------------------------------------------------------------------------
 # Clustering
 # ---------------------------------------------------------------------------
 
-def cluster_sessions(sessions, top_n=TOP_N_PER_SESSION, threshold=JACCARD_THRESHOLD, dominant_k=DOMINANT_K):
+def cluster_sessions(sessions, top_n=TOP_N_PER_SESSION, threshold=JACCARD_THRESHOLD, dominant_k=DOMINANT_K, ubiquitous=None):
     """Greedy Jaccard clustering over session top-N signal sets.
 
     Returns a list of sets of session indices.
     """
+    ubiquitous = ubiquitous or set()
     session_tops = []
     for s in sessions:
         sigs = s["signals"]
         if sigs:
             sorted_sigs = sorted(sigs, key=lambda k: (-sigs[k], k))
-            tops = set(sorted_sigs[:top_n])
+            tops = set(sorted_sigs[:top_n]) - ubiquitous
         else:
             tops = set()
         session_tops.append(tops)
@@ -221,7 +243,7 @@ def cluster_sessions(sessions, top_n=TOP_N_PER_SESSION, threshold=JACCARD_THRESH
                 for sig in session_tops[i]:
                     dom_counts[sig] += 1
             sorted_doms = sorted(dom_counts, key=lambda s: (-dom_counts[s], s))
-            dominant = set(sorted_doms[:dominant_k])
+            dominant = set(sorted_doms[:dominant_k]) - ubiquitous
             if not dominant:
                 break
 
@@ -250,11 +272,14 @@ def cluster_sessions(sessions, top_n=TOP_N_PER_SESSION, threshold=JACCARD_THRESH
 # Gates
 # ---------------------------------------------------------------------------
 
-def dominant_signals(cluster_indices, sessions, k=DOMINANT_K):
+def dominant_signals(cluster_indices, sessions, k=DOMINANT_K, ubiquitous=None):
     sig_counts = defaultdict(int)
     for i in cluster_indices:
         for sig, count in sessions[i]["signals"].items():
             sig_counts[sig] += count
+    if ubiquitous:
+        for sig in ubiquitous:
+            sig_counts.pop(sig, None)
     sorted_sigs = sorted(sig_counts, key=lambda s: (-sig_counts[s], s))
     return sorted_sigs[:k]
 
@@ -263,8 +288,14 @@ def is_coherent(cluster_indices, sessions, dominant, threshold=COHERENCE_THRESHO
     if not dominant:
         return False
     top_sig = dominant[0]
-    count = sum(1 for i in cluster_indices if top_sig in sessions[i]["signals"])
-    return count / len(cluster_indices) >= threshold
+    cluster_count = sum(1 for i in cluster_indices if top_sig in sessions[i]["signals"])
+    if cluster_count / len(cluster_indices) < threshold:
+        return False
+    # Distinguishing: the signal must be meaningfully more concentrated in the cluster
+    global_count = sum(1 for s in sessions if top_sig in s["signals"])
+    global_frac = global_count / len(sessions) if sessions else 1
+    cluster_frac = cluster_count / len(cluster_indices)
+    return cluster_frac > global_frac * 1.5
 
 
 def windows_for_cluster(cluster_indices, sessions, min_ts, window_days=WINDOW_DAYS):
@@ -362,7 +393,8 @@ def mine_lane_ideation(domain_map, state_db_path, profile_dbs_dir):
         return {"note": "no message timestamps", "candidate_count": 0, "candidates": []}
     min_ts = min(all_timestamps)
 
-    clusters = cluster_sessions(all_sessions)
+    ubiquitous = compute_ubiquitous_signals(all_sessions)
+    clusters = cluster_sessions(all_sessions, ubiquitous=ubiquitous)
 
     candidates = []
     for cluster_indices in clusters:
@@ -371,7 +403,7 @@ def mine_lane_ideation(domain_map, state_db_path, profile_dbs_dir):
         if session_count < MIN_SESSIONS and tokens < MIN_TOKENS:
             continue
 
-        dom = dominant_signals(cluster_indices, all_sessions)
+        dom = dominant_signals(cluster_indices, all_sessions, ubiquitous=ubiquitous)
         if not is_coherent(cluster_indices, all_sessions, dom):
             continue
 
