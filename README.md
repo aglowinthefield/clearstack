@@ -72,6 +72,8 @@ The test suite runs it over every Markdown file in this repo.
 
 `clear-ci` replaces `gh pr checks --watch` and `gh run watch` after opening or updating a PR. Those block until every job in every workflow finishes; `clear-ci`'s `scripts/watch` polls job-level status instead and prints each real failure the moment it happens, so the agent can start fixing before the rest of the stack completes. A job GitHub marks `skipped` because a `needs:` dependency already failed is not reported, so one real break downstream of a chain does not read as several.
 
+Each failure line is followed by one response line: `dispatch_repair` when the failed-log tail names a file the PR changed (the agent starts one repair subagent on the same branch), or `request_operator_decision` when it looks like infra trouble or cannot be tied to the diff. The event-to-response contract is in [`skills/clear-ci/references/contract.md`](skills/clear-ci/references/contract.md).
+
 ```bash
 skills/clear-ci/scripts/watch --repo OWNER/REPO --pr 123
 ```

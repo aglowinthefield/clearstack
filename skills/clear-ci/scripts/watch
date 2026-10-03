@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
-"""Watch a PR's CI jobs and report each real failure as it happens.
+"""Watch a PR's CI jobs and respond to each real failure as it happens.
 
 Replaces `gh pr checks --watch` / `gh run watch`, which block until every
 job in every workflow finishes. This polls job-level status for the PR's
 head commit and prints one JSON line the moment a job reaches
 `conclusion: failure`, so the next reader can start fixing before the rest
 of the stack completes.
+
+Each failure line is followed by exactly one response line (the event-to-
+response contract lives in ../references/contract.md):
+
+- dispatch_repair when the failed-log tail names a file the PR changed,
+  carrying everything a repair subagent needs (run id, job id/name, log
+  tail, PR URL, head SHA, changed files, branch). The harness reading the
+  stream spawns the worker; this script never invokes an agent runtime.
+- request_operator_decision when the failure looks like runner/infra
+  trouble or cannot be tied to the diff. The classifier fails toward the
+  operator: only positive path evidence dispatches a repair.
 
 A job GitHub marks `skipped` because a `needs:` dependency already failed
 is not `failure`, so filtering on `conclusion == "failure"` already drops
@@ -17,6 +28,7 @@ import json
 import subprocess
 import sys
 import time
+from pathlib import PurePosixPath
 
 
 def run_gh_json(args):
@@ -29,6 +41,14 @@ def run_gh_json(args):
         return json.loads(out.stdout)
     except ValueError:
         return None
+
+def run_gh_text(args):
+    """Run a gh command and return its stdout as text. None on any failure."""
+    try:
+        out = subprocess.run(["gh", *args], capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return out.stdout
 
 
 def head_sha(repo, pr):
@@ -45,6 +65,100 @@ def run_detail(repo, run_id):
     """{'status', 'workflowName', 'jobs': [{'databaseId', 'name', 'conclusion', 'url'}]} or None."""
     return run_gh_json(["run", "view", str(run_id), "--repo", repo,
                          "--json", "status,jobs,workflowName"])
+
+
+INFRA_SIGNATURES = (
+    "lost communication with the server",
+    "the runner has received a shutdown signal",
+    "the operation was canceled",
+    "api rate limit exceeded",
+    "failed to download action",
+    "no space left on device",
+    "received signal sigterm",
+    "received signal sigkill",
+)
+
+
+def failed_log_tail(repo, run_id, job_id, max_lines=80):
+    """Last max_lines of a failed job's log, or None when gh cannot read it."""
+    text = run_gh_text(["run", "view", str(run_id), "--repo", repo,
+                        "--job", str(job_id), "--log-failed"])
+    if text is None:
+        return None
+    return "\n".join(text.splitlines()[-max_lines:])
+
+
+def changed_files(repo, pr):
+    """Files the PR's diff touches, or None when gh cannot read them."""
+    text = run_gh_text(["pr", "diff", str(pr), "--repo", repo, "--name-only"])
+    if text is None:
+        return None
+    return [line for line in text.splitlines() if line.strip()]
+
+
+def branch_name(repo, pr):
+    data = run_gh_json(["pr", "view", str(pr), "--repo", repo, "--json", "headRefName"])
+    return data.get("headRefName") if data else None
+
+
+def classify(log_tail, files):
+    """Decide whether a failed job belongs to the watched PR's diff.
+
+    Returns (verdict, evidence). 'pr-caused' requires positive evidence: the
+    failed-log tail names a changed file by full path or basename. A runner
+    or infra signature returns 'infra'. Anything else, including an
+    unreadable log, returns 'unknown'. Only 'pr-caused' dispatches a repair,
+    so a guess never lands on the operator as a pushed fix.
+    """
+    if log_tail is None:
+        return ("unknown", ["failed-log tail unreadable"])
+    lowered = log_tail.lower()
+    hits = [s for s in INFRA_SIGNATURES if s in lowered]
+    if hits:
+        return ("infra", hits)
+    matched = [p for p in (files or [])
+               if p in log_tail or PurePosixPath(p).name in log_tail]
+    if matched:
+        return ("pr-caused", matched)
+    return ("unknown", ["no changed-file path appears in the failed-log tail"])
+
+
+def respond(repo, pr, sha, failure):
+    """Build the one response record for a failure event.
+
+    'dispatch_repair' when classify ties the failure to the PR's diff,
+    'request_operator_decision' otherwise. The record carries everything a
+    repair worker needs so the harness adapter spawns it without a second
+    round of gh calls. parent_run_id stays null here; the harness adapter
+    fills it with its current run-record id when it spawns the worker.
+    """
+    log_tail = failed_log_tail(repo, failure["run_id"], failure["job_id"])
+    files = changed_files(repo, pr)
+    verdict, evidence = classify(log_tail, files)
+    record = {
+        "response": "dispatch_repair" if verdict == "pr-caused" else "request_operator_decision",
+        "classification": verdict,
+        "evidence": evidence,
+        "run_id": failure["run_id"],
+        "job_id": failure["job_id"],
+        "job_name": failure["job_name"],
+        "workflow": failure["workflow"],
+        "html_url": failure["html_url"],
+        "pr_url": f"https://github.com/{repo}/pull/{pr}",
+        "head_sha": sha,
+        "branch": branch_name(repo, pr),
+        "changed_files": files,
+        "log_tail": log_tail,
+    }
+    if record["response"] == "dispatch_repair":
+        record["instructions"] = (
+            f"Fix the failing job '{failure['job_name']}' on branch "
+            f"'{record['branch']}' of {repo}. Commit and push to that branch. "
+            "Never open another pull request."
+        )
+        record["spawned_by"] = "clear-ci"
+        record["parent_run_id"] = None
+    return record
 
 
 def new_failures(run_id, workflow_name, jobs, seen):
@@ -72,12 +186,16 @@ def new_failures(run_id, workflow_name, jobs, seen):
     return found
 
 
-def watch(repo, pr, interval=20, max_seconds=3600, sleep=time.sleep, clock=time.time, emit=print):
+def watch(repo, pr, interval=20, max_seconds=3600, sleep=time.sleep, clock=time.time,
+          emit=print, responder=None):
     """Poll until every run for the PR's head SHA is terminal or max_seconds elapses.
 
-    Returns 0 on a clean terminal stop, 1 on timeout. Callers inject `sleep`,
-    `clock`, and `emit` to test the loop without real time or stdout.
+    Emits one failure line per newly failed job, each followed by exactly one
+    response line from the responder, and keeps polling after both. Returns 0
+    on a clean terminal stop, 1 on timeout. Callers inject `sleep`, `clock`,
+    `emit`, and `responder` to test the loop without real time, stdout, or gh.
     """
+    respond_fn = responder if responder is not None else respond
     seen = set()
     start = clock()
     while True:
@@ -97,6 +215,7 @@ def watch(repo, pr, interval=20, max_seconds=3600, sleep=time.sleep, clock=time.
                 all_terminal = False
             for failure in new_failures(run_id, detail.get("workflowName"), detail.get("jobs"), seen):
                 emit(json.dumps(failure))
+                emit(json.dumps(respond_fn(repo, pr, sha, failure)))
 
         if all_terminal:
             return 0
