@@ -697,7 +697,7 @@ def _collect_cross_domain_skill_use(db_path, domains, profile_domain, skills_dir
                 if not skill_name:
                     continue
                 skill_domain = _domain_for_skill(skill_name, domains)
-                if skill_domain and skill_domain != profile_domain:
+                if skill_domain and skill_domain != profile_domain and skill_domain != "shared":
                     findings.append({
                         "session_id": row["session_id"],
                         "message_id": row["id"],
@@ -730,7 +730,7 @@ def _collect_cross_domain_signals(db_path, domains, profile_domain):
                 if not isinstance(cmd, str):
                     continue
                 for domain_name, info in domains.items():
-                    if domain_name == profile_domain:
+                    if domain_name == profile_domain or domain_name == "shared":
                         continue
                     for rx in info["signals"]:
                         if rx.search(cmd):
@@ -780,6 +780,8 @@ def _collect_routing_mismatches(boards_dir, domains, profile_domain_map):
                     continue
                 assignee = row["assignee"]
                 assignee_domain = profile_domain_map.get(assignee)
+                if assignee_domain == "review":
+                    continue
                 for matched in matched_domains:
                     if matched != assignee_domain:
                         findings.append({
@@ -825,7 +827,7 @@ def mine_domain_fit(
 
     for profile_name, db_path in profile_dbs:
         domain_name = profile_domain_map.get(profile_name)
-        if domain_name is None:
+        if domain_name is None or domain_name == "generalist":
             # Generalist: never flagged, but contributes to domain pressure
             cross_skill = []
             cross_signals = defaultdict(list)
@@ -841,6 +843,8 @@ def mine_domain_fit(
 
             # Add unassigned-domain signal hits to domain pressure
             for foreign_domain, hits in cross_signals.items():
+                if foreign_domain == "shared":
+                    continue
                 if foreign_domain not in profile_domain_map.values():
                     domain_pressure[foreign_domain] += len(hits)
 
@@ -872,6 +876,8 @@ def mine_domain_fit(
             continue
         generalist_signals = _collect_cross_domain_signals(db_path, domains, None)
         for foreign_domain, hits in generalist_signals.items():
+            if foreign_domain == "shared":
+                continue
             if foreign_domain not in profile_domain_map.values():
                 domain_pressure[foreign_domain] += len(hits)
 

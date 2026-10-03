@@ -705,10 +705,8 @@ class DomainFitTest(unittest.TestCase):
                 map_path, skills_dir, state_db, Path(td) / "profiles", boards_dir
             )
 
-        self.assertEqual(len(result["routing_mismatches"]), 1)
-        self.assertEqual(result["routing_mismatches"][0]["task_id"], "t1")
-        self.assertEqual(result["routing_mismatches"][0]["matched_domain"], "product")
-        self.assertEqual(result["routing_mismatches"][0]["assignee"], "jester")
+        # Review-lane assignments are skipped; jester is review domain.
+        self.assertEqual(len(result["routing_mismatches"]), 0)
 
     def test_unassigned_domain_pressure_ranking(self):
         with tempfile.TemporaryDirectory() as td:
@@ -812,6 +810,172 @@ class DomainFitTest(unittest.TestCase):
         self.assertIsNone(gen["domain"])
         self.assertEqual(len(gen["cross_domain_skill_use"]), 0)
         self.assertEqual(len(gen["cross_domain_signals"]), 0)
+
+    def test_generalist_domain_never_flagged(self):
+        """default mapped to generalist domain must not be flagged (regression)."""
+        with tempfile.TemporaryDirectory() as td:
+            map_path = self._make_domain_map(td, {
+                "product": {"profiles": ["scribe"], "skills": ["alpha"], "signals": []},
+                "generalist": {"profiles": ["default"], "skills": [], "signals": []},
+            })
+            skills_dir = self._make_skills_dir(td, {"alpha": "A", "beta": "B"})
+            state_db = self._make_state_db(td, [
+                ("s1", 1, json.dumps([{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "skill_view", "arguments": '{"name": "alpha"}'},
+                }])),
+                ("s1", 2, json.dumps([{
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "terminal", "arguments": '{"command": "npm test"}'},
+                }])),
+            ])
+            profiles_dir = Path(td) / "profiles"
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, profiles_dir, Path(td) / "boards"
+            )
+
+        default = next(p for p in result["profiles"] if p["profile"] == "default")
+        self.assertEqual(default["domain"], "generalist")
+        self.assertEqual(len(default["cross_domain_skill_use"]), 0)
+        self.assertEqual(len(default["cross_domain_signals"]), 0)
+
+    def test_shared_domain_skill_use_not_flagged(self):
+        with tempfile.TemporaryDirectory() as td:
+            map_path = self._make_domain_map(td, {
+                "product": {"profiles": ["scribe"], "skills": ["alpha"], "signals": []},
+                "shared": {"profiles": [], "skills": ["humanizer"], "signals": []},
+            })
+            skills_dir = self._make_skills_dir(td, {"alpha": "A", "humanizer": "H"})
+            state_db = self._make_state_db(td, [
+                ("s1", 1, json.dumps([{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "skill_view", "arguments": '{"name": "humanizer"}'},
+                }])),
+            ])
+            profiles_dir = Path(td) / "profiles"
+            profile_dir = profiles_dir / "scribe"
+            profile_dir.mkdir(parents=True)
+            profile_db = profile_dir / "state.db"
+            import shutil
+            shutil.copy(state_db, profile_db)
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, profiles_dir, Path(td) / "boards"
+            )
+
+        scribe = next(p for p in result["profiles"] if p["profile"] == "scribe")
+        self.assertEqual(len(scribe["cross_domain_skill_use"]), 0)
+
+    def test_shared_domain_signals_not_flagged(self):
+        with tempfile.TemporaryDirectory() as td:
+            map_path = self._make_domain_map(td, {
+                "product": {"profiles": ["scribe"], "skills": [], "signals": []},
+                "shared": {"profiles": [], "skills": [], "signals": [r"\bhumanizer\b"]},
+            })
+            skills_dir = self._make_skills_dir(td, {})
+            state_db = self._make_state_db(td, [
+                ("s1", 1, json.dumps([{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "terminal", "arguments": '{"command": "humanizer fix"}'},
+                }])),
+            ])
+            profiles_dir = Path(td) / "profiles"
+            profile_dir = profiles_dir / "scribe"
+            profile_dir.mkdir(parents=True)
+            profile_db = profile_dir / "state.db"
+            import shutil
+            shutil.copy(state_db, profile_db)
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, profiles_dir, Path(td) / "boards"
+            )
+
+        scribe = next(p for p in result["profiles"] if p["profile"] == "scribe")
+        self.assertNotIn("shared", scribe["cross_domain_signals"])
+
+    def test_review_routing_mismatch_skipped(self):
+        with tempfile.TemporaryDirectory() as td:
+            map_path = self._make_domain_map(td, {
+                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"silk-remix"]},
+                "review": {"profiles": ["jester"], "skills": [], "signals": []},
+            })
+            skills_dir = self._make_skills_dir(td, {})
+            state_db = self._make_state_db(td, [])
+            boards_dir = Path(td) / "boards"
+            board_dir = boards_dir / "test"
+            board_dir.mkdir(parents=True)
+            db_path = board_dir / "kanban.db"
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    body TEXT,
+                    assignee TEXT,
+                    status TEXT,
+                    skills TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO tasks (id, title, body, assignee, status) VALUES (?, ?, ?, ?, ?)",
+                ("t1", "Fix silk-remix build", "Body", "jester", "running"),
+            )
+            conn.commit()
+            conn.close()
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, Path(td) / "profiles", boards_dir
+            )
+
+        self.assertEqual(len(result["routing_mismatches"]), 0)
+
+    def test_non_review_routing_mismatch_still_flagged(self):
+        with tempfile.TemporaryDirectory() as td:
+            map_path = self._make_domain_map(td, {
+                "product": {"profiles": ["scribe"], "skills": [], "signals": []},
+                "review": {"profiles": ["jester"], "skills": [], "signals": [r"\bgh pr review\b"]},
+            })
+            skills_dir = self._make_skills_dir(td, {})
+            state_db = self._make_state_db(td, [])
+            boards_dir = Path(td) / "boards"
+            board_dir = boards_dir / "test"
+            board_dir.mkdir(parents=True)
+            db_path = board_dir / "kanban.db"
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    body TEXT,
+                    assignee TEXT,
+                    status TEXT,
+                    skills TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO tasks (id, title, body, assignee, status) VALUES (?, ?, ?, ?, ?)",
+                ("t1", "gh pr review for foo", "Body", "scribe", "running"),
+            )
+            conn.commit()
+            conn.close()
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, Path(td) / "profiles", boards_dir
+            )
+
+        self.assertEqual(len(result["routing_mismatches"]), 1)
+        self.assertEqual(result["routing_mismatches"][0]["task_id"], "t1")
+        self.assertEqual(result["routing_mismatches"][0]["matched_domain"], "review")
+        self.assertEqual(result["routing_mismatches"][0]["assignee"], "scribe")
 
     def test_profile_db_aggregation_includes_default(self):
         with tempfile.TemporaryDirectory() as td:
