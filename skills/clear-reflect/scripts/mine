@@ -746,8 +746,17 @@ def _collect_cross_domain_signals(db_path, domains, profile_domain):
     return hits
 
 
+LIVE_STATUSES = {"triage", "todo", "ready", "running", "blocked", "review"}
+
+
 def _collect_routing_mismatches(boards_dir, domains, profile_domain_map):
-    """Return list of kanban cards whose signals match one domain but are assigned to another."""
+    """Return list of live kanban cards whose signals match a foreign domain.
+
+    Rules:
+    - Only cards in live statuses are checked.
+    - Unmapped assignees and generalist/review lanes are skipped.
+    - At most one flag per card: the domain with the most signal hits.
+    """
     findings = []
     if not boards_dir.exists():
         return findings
@@ -766,31 +775,44 @@ def _collect_routing_mismatches(boards_dir, domains, profile_domain_map):
             if not cur.fetchone():
                 continue
             cur = conn.execute(
-                "SELECT id, title, body, assignee FROM tasks WHERE assignee IS NOT NULL"
+                "SELECT id, title, body, assignee, status FROM tasks WHERE assignee IS NOT NULL"
             )
             for row in cur:
-                text = f"{row['title'] or ''}\n{row['body'] or ''}"
-                matched_domains = []
-                for domain_name, info in domains.items():
-                    for rx in info["signals"]:
-                        if rx.search(text):
-                            matched_domains.append(domain_name)
-                            break
-                if not matched_domains:
+                status = row["status"] or ""
+                if status not in LIVE_STATUSES:
                     continue
                 assignee = row["assignee"]
                 assignee_domain = profile_domain_map.get(assignee)
-                if assignee_domain == "review":
+                if assignee_domain is None or assignee_domain in ("generalist", "review"):
                     continue
-                for matched in matched_domains:
-                    if matched != assignee_domain:
-                        findings.append({
-                            "board": board_path.name,
-                            "task_id": row["id"],
-                            "matched_domain": matched,
-                            "assignee": assignee,
-                            "assignee_domain": assignee_domain,
-                        })
+
+                text = f"{row['title'] or ''}\n{row['body'] or ''}"
+                domain_hits = {}
+                for domain_name, info in domains.items():
+                    if domain_name == assignee_domain or domain_name == "shared":
+                        continue
+                    hit_count = 0
+                    for rx in info["signals"]:
+                        if rx.search(text):
+                            hit_count += 1
+                    if hit_count > 0:
+                        domain_hits[domain_name] = hit_count
+
+                if not domain_hits:
+                    continue
+
+                # Pick the domain with the most signal hits (alphabetic tie-break).
+                best_domain = max(domain_hits, key=lambda d: (domain_hits[d], d))
+                other_count = len(domain_hits) - 1
+
+                findings.append({
+                    "board": board_path.name,
+                    "task_id": row["id"],
+                    "matched_domain": best_domain,
+                    "other_matches": other_count,
+                    "assignee": assignee,
+                    "assignee_domain": assignee_domain,
+                })
         finally:
             conn.close()
     return findings
@@ -970,9 +992,10 @@ def emit_summary(oversized, repeats, unused, domain_fit):
         if domain_fit["routing_mismatches"]:
             lines.append(f"  Routing mismatches: {len(domain_fit['routing_mismatches'])} finding(s)")
             for rm in domain_fit["routing_mismatches"][:5]:
+                extra = f" (+{rm['other_matches']} other)" if rm.get("other_matches", 0) > 0 else ""
                 lines.append(
                     f"    {rm['task_id']} on {rm['board']} — "
-                    f"matches {rm['matched_domain']}, assigned to {rm['assignee']}"
+                    f"matches {rm['matched_domain']}{extra}, assigned to {rm['assignee']}"
                 )
 
     return "\n".join(lines)

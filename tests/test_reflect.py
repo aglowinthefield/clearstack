@@ -977,6 +977,198 @@ class DomainFitTest(unittest.TestCase):
         self.assertEqual(result["routing_mismatches"][0]["matched_domain"], "review")
         self.assertEqual(result["routing_mismatches"][0]["assignee"], "scribe")
 
+    def test_archived_card_skipped(self):
+        with tempfile.TemporaryDirectory() as td:
+            map_path = self._make_domain_map(td, {
+                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"silk-remix"]},
+            })
+            skills_dir = self._make_skills_dir(td, {})
+            state_db = self._make_state_db(td, [])
+            boards_dir = Path(td) / "boards"
+            board_dir = boards_dir / "test"
+            board_dir.mkdir(parents=True)
+            db_path = board_dir / "kanban.db"
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    body TEXT,
+                    assignee TEXT,
+                    status TEXT,
+                    skills TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO tasks (id, title, body, assignee, status) VALUES (?, ?, ?, ?, ?)",
+                ("t1", "Fix silk-remix build", "Body", "jester", "archived"),
+            )
+            conn.commit()
+            conn.close()
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, Path(td) / "profiles", boards_dir
+            )
+
+        self.assertEqual(len(result["routing_mismatches"]), 0)
+
+    def test_done_card_skipped(self):
+        with tempfile.TemporaryDirectory() as td:
+            map_path = self._make_domain_map(td, {
+                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"silk-remix"]},
+            })
+            skills_dir = self._make_skills_dir(td, {})
+            state_db = self._make_state_db(td, [])
+            boards_dir = Path(td) / "boards"
+            board_dir = boards_dir / "test"
+            board_dir.mkdir(parents=True)
+            db_path = board_dir / "kanban.db"
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    body TEXT,
+                    assignee TEXT,
+                    status TEXT,
+                    skills TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO tasks (id, title, body, assignee, status) VALUES (?, ?, ?, ?, ?)",
+                ("t1", "Fix silk-remix build", "Body", "jester", "done"),
+            )
+            conn.commit()
+            conn.close()
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, Path(td) / "profiles", boards_dir
+            )
+
+        self.assertEqual(len(result["routing_mismatches"]), 0)
+
+    def test_unmapped_assignee_skipped(self):
+        with tempfile.TemporaryDirectory() as td:
+            map_path = self._make_domain_map(td, {
+                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"silk-remix"]},
+            })
+            skills_dir = self._make_skills_dir(td, {})
+            state_db = self._make_state_db(td, [])
+            boards_dir = Path(td) / "boards"
+            board_dir = boards_dir / "test"
+            board_dir.mkdir(parents=True)
+            db_path = board_dir / "kanban.db"
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    body TEXT,
+                    assignee TEXT,
+                    status TEXT,
+                    skills TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO tasks (id, title, body, assignee, status) VALUES (?, ?, ?, ?, ?)",
+                ("t1", "Fix silk-remix build", "Body", "tom", "running"),
+            )
+            conn.commit()
+            conn.close()
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, Path(td) / "profiles", boards_dir
+            )
+
+        self.assertEqual(len(result["routing_mismatches"]), 0)
+
+    def test_generalist_assignee_skipped(self):
+        with tempfile.TemporaryDirectory() as td:
+            map_path = self._make_domain_map(td, {
+                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"silk-remix"]},
+                "generalist": {"profiles": ["default"], "skills": [], "signals": []},
+            })
+            skills_dir = self._make_skills_dir(td, {})
+            state_db = self._make_state_db(td, [])
+            boards_dir = Path(td) / "boards"
+            board_dir = boards_dir / "test"
+            board_dir.mkdir(parents=True)
+            db_path = board_dir / "kanban.db"
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    body TEXT,
+                    assignee TEXT,
+                    status TEXT,
+                    skills TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO tasks (id, title, body, assignee, status) VALUES (?, ?, ?, ?, ?)",
+                ("t1", "Fix silk-remix build", "Body", "default", "running"),
+            )
+            conn.commit()
+            conn.close()
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, Path(td) / "profiles", boards_dir
+            )
+
+        self.assertEqual(len(result["routing_mismatches"]), 0)
+
+    def test_multi_domain_match_collapses_to_strongest(self):
+        with tempfile.TemporaryDirectory() as td:
+            map_path = self._make_domain_map(td, {
+                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"silk-remix", r"npm"]},
+                "home": {"profiles": [], "skills": [], "signals": [r"chezmoi"]},
+                "investigate": {"profiles": ["page"], "skills": [], "signals": []},
+            })
+            skills_dir = self._make_skills_dir(td, {})
+            state_db = self._make_state_db(td, [])
+            boards_dir = Path(td) / "boards"
+            board_dir = boards_dir / "test"
+            board_dir.mkdir(parents=True)
+            db_path = board_dir / "kanban.db"
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    body TEXT,
+                    assignee TEXT,
+                    status TEXT,
+                    skills TEXT
+                )
+                """
+            )
+            # product has 2 hits, home has 1 hit.
+            conn.execute(
+                "INSERT INTO tasks (id, title, body, assignee, status) VALUES (?, ?, ?, ?, ?)",
+                ("t1", "silk-remix npm and chezmoi", "Body", "page", "running"),
+            )
+            conn.commit()
+            conn.close()
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, Path(td) / "profiles", boards_dir
+            )
+
+        self.assertEqual(len(result["routing_mismatches"]), 1)
+        self.assertEqual(result["routing_mismatches"][0]["task_id"], "t1")
+        self.assertEqual(result["routing_mismatches"][0]["matched_domain"], "product")
+        self.assertEqual(result["routing_mismatches"][0]["other_matches"], 1)
+
     def test_profile_db_aggregation_includes_default(self):
         with tempfile.TemporaryDirectory() as td:
             map_path = self._make_domain_map(td, {
