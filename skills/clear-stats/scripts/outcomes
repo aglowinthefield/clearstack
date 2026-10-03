@@ -1,0 +1,603 @@
+#!/usr/bin/env python3
+"""Judge ClearStack runs against repository evidence, not self-reports.
+
+Reads the local run log and correlates each run to commits through the
+`Clear-Run: <id>` trailer, then to revert, rework, and parent-verdict
+evidence. GitHub enrichment (PR merge, review, and CI state) is opt-in
+via --github and failure-safe: any gh problem is recorded as unavailable
+evidence, never as a negative outcome.
+
+Result model
+------------
+Per run the report carries:
+
+- self_report: what the agent claimed at record end (status, claims, PR).
+- outcome: landed, reworked, reverted, rejected, partially_landed,
+  not_landed, no_commits, or unknown.
+- confidence: verified when evidence beyond the self-report (git,
+  GitHub, or a parent verdict) decided the outcome; unverified when
+  only the self-report exists.
+- evidence: one entry per source (record, git, github), each marked
+  available or unavailable with a note. Missing evidence stays unknown;
+  it is never collapsed into a score of zero.
+- parent_confirmation / child_confirmations: verdicts written with
+  `record confirm`, so a Clear CI repair child's acceptance or rejection
+  by its parent is part of the outcome. A rejected child is outcome
+  "rejected" regardless of what git shows.
+
+Exit status is 0 whenever a report was produced; missing evidence is
+data, not an error.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+OUTCOMES = (
+    "landed",
+    "reworked",
+    "reverted",
+    "rejected",
+    "partially_landed",
+    "not_landed",
+    "no_commits",
+    "unknown",
+)
+
+
+def default_runs_path():
+    state_home = os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state"
+    return Path(state_home) / "clearstack" / "runs.jsonl"
+
+
+def load_events(path):
+    """Read the run log into {run_id: [events]}. Tolerates bad lines.
+
+    Returns (events_by_run, note). note is None on success, a string when
+    the log is missing or some lines could not be parsed.
+    """
+    path = Path(path)
+    if not path.exists():
+        return {}, f"not found: {path}"
+    events_by_run = {}
+    bad_lines = 0
+    with path.open(encoding="utf-8") as log:
+        for line in log:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                bad_lines += 1
+                continue
+            run_id = event.get("run") if isinstance(event, dict) else None
+            if not isinstance(run_id, str) or not run_id:
+                bad_lines += 1
+                continue
+            events_by_run.setdefault(run_id, []).append(event)
+    note = f"{bad_lines} unreadable line(s) skipped" if bad_lines else None
+    return events_by_run, note
+
+
+def git(repo, *args):
+    """Run git in repo and return stdout, or None on any failure."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            capture_output=True, text=True, check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return out.stdout
+
+
+def is_git_repo(repo):
+    return git(repo, "rev-parse", "--is-inside-work-tree") is not None
+
+
+def default_branch_ref(repo):
+    """Best guess at the repo's default branch ref, or None.
+
+    Prefers the origin HEAD symref, then local main/master, then the
+    checked-out branch. None means "cannot tell", which callers must
+    preserve as unknown rather than guessing.
+    """
+    head = git(repo, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
+    if head and head.strip():
+        return head.strip()
+    for name in ("main", "master"):
+        if git(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{name}"):
+            return name
+    current = git(repo, "branch", "--show-current")
+    return current.strip() or None if current else None
+
+
+TRAILER_RE = re.compile(r"^Clear-Run:[ \t]*(\S+)[ \t]*$", re.MULTILINE)
+
+
+def scan_trailer_commits(repo):
+    """Map run id -> commits carrying its Clear-Run trailer.
+
+    One `git log --all` pass. Fields are unit-separated, records
+    record-separated; the body is the remainder so multi-line messages
+    parse fine. Returns None when git cannot read the repo.
+    """
+    out = git(repo, "log", "--all", "--format=%x1e%H%x1f%ct%x1f%s%x1f%B")
+    if out is None:
+        return None
+    by_run = {}
+    for record in out.split("\x1e"):
+        record = record.strip("\n")
+        if not record:
+            continue
+        parts = record.split("\x1f", 3)
+        if len(parts) != 4:
+            continue
+        sha, committed_at, subject, body = parts
+        for match in TRAILER_RE.finditer(body):
+            run_id = match.group(1)
+            by_run.setdefault(run_id, []).append({
+                "sha": sha,
+                "committed_at": int(committed_at),
+                "subject": subject,
+            })
+    for commits in by_run.values():
+        commits.sort(key=lambda c: c["committed_at"])
+    return by_run
+
+
+def touched_paths(repo, sha):
+    """Files a commit changed, or None when git cannot read it."""
+    out = git(repo, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", sha)
+    if out is None:
+        return None
+    return [line for line in out.splitlines() if line.strip()]
+
+
+def is_ancestor(repo, sha, ref):
+    """True/False, or None when git cannot answer."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "merge-base", "--is-ancestor", sha, ref],
+            capture_output=True,
+        )
+    except OSError:
+        return None
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    return None
+
+
+def revert_commits(repo, sha, default_ref):
+    """Shas of commits that revert sha, restricted to the default branch.
+
+    A revert on an unmerged side branch does not flip an outcome, so when
+    default_ref is known the revert must be reachable from it. When the
+    default ref is unknown any revert counts; the run's outcome stays
+    unknown anyway.
+    """
+    out = git(repo, "log", "--all", "--format=%H",
+              f"--grep=This reverts commit {sha}")
+    if out is None:
+        return None
+    reverts = [line.strip() for line in out.splitlines() if line.strip()]
+    if default_ref is None:
+        return reverts
+    return [r for r in reverts if is_ancestor(repo, r, default_ref)]
+
+
+def followup_commits(repo, base_sha, default_ref, paths):
+    """Commits on the default branch after base_sha that touch paths."""
+    if not paths:
+        return []
+    out = git(repo, "log", f"{base_sha}..{default_ref}", "--format=%H", "--", *paths)
+    if out is None:
+        return None
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def collect_git_evidence(repo, run_id):
+    """Correlate a run to commits through its Clear-Run trailer.
+
+    Always returns an evidence dict; available is False with a note when
+    the repo cannot be read. Commits carry their own reachability and
+    revert state so nothing is hidden by the summary outcome.
+    """
+    evidence = {"available": False, "note": None, "repo": str(repo),
+                "default_ref": None, "commits": [], "followup_commits": []}
+    if not Path(repo).is_dir():
+        evidence["note"] = f"not a directory: {repo}"
+        return evidence
+    if not is_git_repo(repo):
+        evidence["note"] = f"not a git repository: {repo}"
+        return evidence
+
+    by_run = scan_trailer_commits(repo)
+    if by_run is None:
+        evidence["note"] = "git log failed"
+        return evidence
+
+    evidence["available"] = True
+    evidence["default_ref"] = default_branch_ref(repo)
+    default_ref = evidence["default_ref"]
+    commits = by_run.get(run_id, [])
+
+    landed_shas = []
+    paths = set()
+    for commit in commits:
+        sha = commit["sha"]
+        commit["on_default_branch"] = (
+            is_ancestor(repo, sha, default_ref) if default_ref else None
+        )
+        commit["reverted_by"] = revert_commits(repo, sha, default_ref) or []
+        commit["paths"] = touched_paths(repo, sha)
+        if commit["on_default_branch"]:
+            landed_shas.append(sha)
+            paths.update(commit["paths"] or [])
+    evidence["commits"] = commits
+
+    if landed_shas and default_ref:
+        newest = max((c for c in commits if c["sha"] in landed_shas),
+                     key=lambda c: c["committed_at"])
+        evidence["followup_commits"] = followup_commits(
+            repo, newest["sha"], default_ref, sorted(paths)) or []
+    return evidence
+
+
+def run_gh_json(args):
+    """Run a gh command and parse stdout as JSON. None on any failure."""
+    try:
+        out = subprocess.run(["gh", *args], capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    try:
+        return json.loads(out.stdout)
+    except ValueError:
+        return None
+
+
+def repo_slug(repo):
+    """OWNER/REPO for a github.com origin remote, or None."""
+    url = git(repo, "remote", "get-url", "origin")
+    if not url:
+        return None
+    match = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?/?$", url.strip())
+    return f"{match.group(1)}/{match.group(2)}" if match else None
+
+
+def pr_number(value):
+    """Extract a PR number from a recorded URL or bare number."""
+    if not value:
+        return None
+    match = re.search(r"/pull/(\d+)", str(value))
+    if match:
+        return int(match.group(1))
+    return int(value) if str(value).isdigit() else None
+
+
+def summarize_checks(rollup):
+    """Collapse statusCheckRollup into conclusion counts."""
+    counts = {}
+    if not isinstance(rollup, list):
+        return counts
+    for check in rollup:
+        if not isinstance(check, dict):
+            continue
+        state = check.get("conclusion") or check.get("status") or "unknown"
+        counts[state] = counts.get(state, 0) + 1
+    return counts
+
+
+def enrich_github(repo, self_report, commits, gh=run_gh_json):
+    """Best-effort PR evidence for a run. Never raises, never guesses.
+
+    gh is injectable for tests. Any failure returns available False with
+    a note; the caller keeps the local-only outcome.
+    """
+    evidence = {"requested": True, "available": False, "note": None, "pr": None}
+    slug = repo_slug(repo)
+    if slug is None:
+        evidence["note"] = "no github.com origin remote"
+        return evidence
+
+    number = pr_number(self_report.get("pr"))
+    if number is None and commits:
+        found = gh(["pr", "list", "--repo", slug, "--search", commits[0]["sha"],
+                    "--state", "all", "--limit", "1", "--json", "number"])
+        if isinstance(found, list) and found:
+            number = found[0].get("number")
+    if number is None:
+        evidence["note"] = "no PR recorded or found for the run's commits"
+        return evidence
+
+    data = gh(["pr", "view", str(number), "--repo", slug, "--json",
+               "number,url,state,mergedAt,mergeCommit,reviewDecision,"
+               "headRefOid,statusCheckRollup"])
+    if not isinstance(data, dict):
+        evidence["note"] = f"gh could not read PR {slug}#{number}"
+        return evidence
+
+    evidence["available"] = True
+    evidence["pr"] = {
+        "number": data.get("number", number),
+        "url": data.get("url"),
+        "state": data.get("state"),
+        "merged_at": data.get("mergedAt"),
+        "merge_commit": (data.get("mergeCommit") or {}).get("oid"),
+        "review_decision": data.get("reviewDecision"),
+        "head_sha": data.get("headRefOid"),
+        "checks": summarize_checks(data.get("statusCheckRollup")),
+    }
+    return evidence
+
+
+def latest_confirmations(events):
+    """Split confirm events into (parent verdict on this run, verdicts by this run)."""
+    parent_confirmation = None
+    child_confirmations = []
+    for event in events:
+        if event.get("event") != "confirm":
+            continue
+        verdict = {"child_run": event.get("child_run"), "status": event.get("status"),
+                   "reason": event.get("reason"), "ts": event.get("ts")}
+        child_confirmations.append(verdict)
+    return parent_confirmation, child_confirmations
+
+
+def classify(git_ev, gh_ev, parent_confirmation, reasons):
+    """Pick the outcome from the evidence at hand.
+
+    Order matters: an explicit parent rejection outranks repository
+    signals; an explicit revert outranks a merge; GitHub merge state can
+    rescue a run whose local default branch is stale or unknown.
+    """
+    if parent_confirmation and parent_confirmation.get("status") == "rejected":
+        reasons.append("parent run rejected this run's report")
+        return "rejected"
+
+    pr = (gh_ev or {}).get("pr") if gh_ev else None
+    gh_merged = bool(pr and pr.get("state") == "MERGED")
+    gh_closed = bool(pr and pr.get("state") == "CLOSED")
+
+    if not git_ev["available"]:
+        if gh_merged:
+            reasons.append("PR is merged; local git evidence unavailable")
+            return "landed"
+        if gh_closed:
+            reasons.append("PR was closed unmerged; local git evidence unavailable")
+            return "not_landed"
+        reasons.append(git_ev["note"] or "git evidence unavailable")
+        return "unknown"
+
+    commits = git_ev["commits"]
+    if not commits:
+        if gh_merged:
+            reasons.append("PR is merged but no commit carries the run's trailer")
+            return "landed"
+        if gh_closed:
+            reasons.append("PR was closed unmerged and no commit carries the trailer")
+            return "not_landed"
+        reasons.append("no commit carries the run's Clear-Run trailer")
+        return "no_commits"
+
+    reverted = [c for c in commits if c["reverted_by"]]
+    if reverted:
+        reasons.append(
+            f"{len(reverted)} run commit(s) reverted on the default branch")
+        return "reverted"
+
+    states = [c["on_default_branch"] for c in commits]
+    if None in states:
+        if gh_merged:
+            reasons.append("PR is merged; local default branch unknown")
+            return "landed"
+        reasons.append("default branch unknown; cannot test reachability")
+        return "unknown"
+
+    landed_count = sum(1 for s in states if s)
+    if landed_count == 0:
+        if gh_merged:
+            reasons.append("PR is merged; local default branch may be stale")
+            return "landed"
+        if gh_closed:
+            reasons.append("PR was closed unmerged; run commits never landed")
+        else:
+            reasons.append("no run commit is reachable from the default branch")
+        return "not_landed"
+    if landed_count < len(states):
+        reasons.append(
+            f"{landed_count} of {len(states)} run commits reached the default branch")
+        return "partially_landed"
+
+    if git_ev["followup_commits"]:
+        reasons.append(
+            f"{len(git_ev['followup_commits'])} later commit(s) touch the run's paths")
+        return "reworked"
+    if pr and pr.get("review_decision") == "CHANGES_REQUESTED":
+        reasons.append("PR review requested changes")
+        return "reworked"
+    reasons.append("all run commits are on the default branch with no later rework")
+    return "landed"
+
+
+def collect_run(run_id, events, repo=None, github=False, gh=run_gh_json):
+    """Build the outcome record for one run."""
+    starts = [e for e in events if e.get("event") == "start"]
+    ends = [e for e in events if e.get("event") == "end"]
+    start = starts[0] if starts else {}
+    end = ends[-1] if ends else {}
+    self_report = {
+        "status": end.get("status", "open"),
+        "verified": end.get("verified") or [],
+        "unverified": end.get("unverified") or [],
+        "needs": end.get("needs"),
+        "pr": end.get("pr"),
+    }
+
+    _, child_confirmations = latest_confirmations(events)
+    repo = repo or start.get("cwd") or end.get("cwd") or os.getcwd()
+
+    git_ev = collect_git_evidence(repo, run_id)
+    gh_ev = None
+    if github:
+        gh_ev = enrich_github(repo, self_report, git_ev["commits"], gh=gh)
+
+    # Confirm events live on the parent's record, so a parent's verdict on
+    # this run is attached later by attach_parent_verdicts, not here.
+    reasons = []
+    outcome = classify(git_ev, gh_ev, None, reasons)
+
+    external_evidence = (
+        (git_ev["available"] and bool(git_ev["commits"]))
+        or bool(gh_ev and gh_ev.get("available"))
+    )
+    confidence = "verified" if external_evidence else "unverified"
+
+    record = {
+        "run": run_id,
+        "task": start.get("task"),
+        "agent": start.get("agent"),
+        "parent_run_id": start.get("parent_run_id"),
+        "spawned_by": start.get("spawned_by"),
+        "self_report": self_report,
+        "outcome": outcome,
+        "confidence": confidence,
+        "reasons": reasons,
+        "parent_confirmation": None,
+        "child_confirmations": child_confirmations,
+        "evidence": {
+            "record": {"available": True, "events": len(events)},
+            "git": git_ev,
+            "github": gh_ev or {"requested": github, "available": False,
+                                "note": None if github else "not requested",
+                                "pr": None},
+        },
+    }
+    return record
+
+
+def attach_parent_verdicts(runs_by_id):
+    """Fill each child run's parent_confirmation from its parent's events.
+
+    Confirm events are stored on the parent run, so a child run only
+    learns its verdict by looking up its parent in the same log.
+    """
+    for record in runs_by_id.values():
+        parent_id = record["parent_run_id"]
+        if not parent_id or parent_id not in runs_by_id:
+            continue
+        verdicts = [v for v in runs_by_id[parent_id]["child_confirmations"]
+                    if v["child_run"] == record["run"]]
+        if not verdicts:
+            continue
+        verdict = verdicts[-1]
+        record["parent_confirmation"] = verdict
+        if verdict["status"] == "rejected" and record["outcome"] != "rejected":
+            record["outcome"] = "rejected"
+            record["confidence"] = "verified"
+            record["reasons"].insert(0, "parent run rejected this run's report")
+        elif record["confidence"] == "unverified":
+            record["confidence"] = "verified"
+
+
+def collect(runs_path, repo=None, run_filter=None, github=False, gh=run_gh_json):
+    """Build the full outcome report."""
+    events_by_run, note = load_events(runs_path)
+    report = {
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "sources": {
+            "runs_jsonl": {"path": str(runs_path), "note": note},
+            "github": {"requested": github},
+        },
+        "runs": [],
+        "summary": "",
+    }
+    run_ids = sorted(events_by_run)
+    if run_filter:
+        run_ids = [r for r in run_ids if r in set(run_filter)]
+
+    runs_by_id = {}
+    for run_id in run_ids:
+        record = collect_run(run_id, events_by_run[run_id], repo=repo,
+                             github=github, gh=gh)
+        runs_by_id[run_id] = record
+    attach_parent_verdicts(runs_by_id)
+
+    report["runs"] = sorted(runs_by_id.values(),
+                            key=lambda r: r["run"], reverse=True)
+    report["summary"] = emit_summary(report["runs"])
+    return report
+
+
+def emit_summary(runs):
+    """Human-readable summary: outcome counts, then claim-vs-proof gaps."""
+    lines = [f"Runs: {len(runs)}"]
+    counts = {outcome: 0 for outcome in OUTCOMES}
+    for record in runs:
+        counts[record["outcome"]] = counts.get(record["outcome"], 0) + 1
+    for outcome in OUTCOMES:
+        if counts[outcome]:
+            lines.append(f"  {outcome}: {counts[outcome]}")
+
+    gaps = [r for r in runs
+            if r["self_report"]["status"] == "done"
+            and r["outcome"] in ("reverted", "rejected", "not_landed", "unknown")]
+    if gaps:
+        lines.append("")
+        lines.append(f"Claimed done but evidence disagrees or is missing: {len(gaps)}")
+        for record in gaps:
+            reason = record["reasons"][0] if record["reasons"] else record["outcome"]
+            lines.append(f"  {record['run']}: {record['outcome']} ({reason})")
+    return "\n".join(lines)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="outcomes",
+        description="Judge ClearStack runs against repository evidence.",
+    )
+    parser.add_argument("--runs", type=Path, default=default_runs_path(),
+                        help="path to the clearstack runs.jsonl log")
+    parser.add_argument("--repo", type=Path,
+                        help="repository to correlate against (default: each "
+                             "run's recorded cwd, else the current directory)")
+    parser.add_argument("--run", action="append", dest="run_filter",
+                        help="collect only this run id (repeatable)")
+    parser.add_argument("--github", action="store_true",
+                        help="enrich with PR merge, review, and CI state via gh; "
+                             "every gh failure is recorded as unavailable evidence")
+    parser.add_argument("--format", choices=["json", "summary", "both"],
+                        default="both", help="output format")
+    parser.add_argument("--output", type=Path, help="write output to this file")
+    args = parser.parse_args()
+
+    report = collect(args.runs, repo=args.repo, run_filter=args.run_filter,
+                     github=args.github)
+
+    json_out = json.dumps(report, indent=2)
+    if args.format == "json":
+        if args.output:
+            args.output.write_text(json_out + "\n")
+        else:
+            print(json_out)
+    elif args.format == "summary":
+        if args.output:
+            args.output.write_text(report["summary"] + "\n")
+        else:
+            print(report["summary"])
+    else:
+        if args.output:
+            args.output.write_text(json_out + "\n" + report["summary"] + "\n")
+        else:
+            print(json_out)
+            print(report["summary"])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

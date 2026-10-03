@@ -131,6 +131,16 @@ The `/tokens` route shows a token-spend analytics view computed from `~/.hermes/
 
 The dashboard should also preserve the user's original request and pending decisions through long agent output, so the current goal does not get buried. This first version reads run records only and does not capture conversation text.
 
+## Clear stats
+
+`clear-stats` judges each run against repository evidence instead of the run's own report. The collector correlates a run to commits through the `Clear-Run` trailer, then to PR, merge, rework, revert, and CI state when available:
+
+```bash
+skills/clear-stats/scripts/outcomes --github
+```
+
+Each run gets an outcome (landed, reworked, reverted, rejected, partially_landed, not_landed, no_commits, unknown), a confidence (verified when git, GitHub, or a parent verdict decided it; unverified when only the self-report exists), and per-source evidence marked available or unavailable. Missing evidence stays unknown, never zero. GitHub enrichment is opt-in and failure-safe. A repair child its parent rejected through `record confirm` reports outcome `rejected`. The result model is in [`skills/clear-stats/SKILL.md`](skills/clear-stats/SKILL.md).
+
 ## Clear reflect
 
 `clear-reflect` mines agent history for repeated waste and proposes guards, never applying them automatically. A weekly cron job runs the mining pass every Monday at 08:00 and delivers the human summary to the operator's chat.
@@ -157,7 +167,7 @@ Run with `--format json` for machine-readable output, or `--format summary` for 
 | 1c | `clear-ci`: fail-fast CI watcher, `scripts/watch` | merged |
 | 2 | Playbooks: investigate, bug-fix, feature, review, pickup/handoff | merged |
 | 2b | Playbook: ship | merged |
-| 3 | `clear-stats`: outcomes, claim vs proof, rework, corrections, and cost across Claude Code, Codex, Hermes, and GitHub | planned |
+|| 3 | `clear-stats`: outcomes, claim vs proof, rework, corrections, and cost across Claude Code, Codex, Hermes, and GitHub | in progress; outcome collector merged |
 | 4 | `clear-reflect`: mine transcripts for repeated corrections and repeated tool-call chains, and propose principles, guards, or scripts | merged |
 | 5 | Local dashboard: read-only view of run records | in progress; telemetry now reads from the harness session log when available |
 
