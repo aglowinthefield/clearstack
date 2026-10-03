@@ -14,6 +14,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+import lane_ideation
+
 try:
     import yaml
 except ImportError:  # the repo is standard-library only; fall back to the subset parser
@@ -927,7 +929,7 @@ def mine_domain_fit(
 # Reporting
 # ---------------------------------------------------------------------------
 
-def emit_summary(oversized, repeats, unused, domain_fit):
+def emit_summary(oversized, repeats, unused, domain_fit, lane_ideation_data):
     """Return a short human-readable summary string."""
     lines = []
     lines.append(
@@ -998,6 +1000,10 @@ def emit_summary(oversized, repeats, unused, domain_fit):
                     f"matches {rm['matched_domain']}{extra}, assigned to {rm['assignee']}"
                 )
 
+    # Lane ideation
+    lines.append("")
+    lines.append(lane_ideation.format_lane_ideation_summary(lane_ideation_data))
+
     return "\n".join(lines)
 
 
@@ -1057,11 +1063,17 @@ def mine(state_db_path, runs_path, skills_dir=None, agent_hooks_dir=None,
         boards_dir,
     )
 
+    domain_map, _ = load_domain_map(domain_map_path)
+    report["findings"]["lane_ideation"] = lane_ideation.mine_lane_ideation(
+        domain_map, state_db_path, profile_dbs_dir
+    )
+
     report["summary"] = emit_summary(
         report["findings"]["oversized_results"],
         report["findings"]["repeated_commands"],
         report["findings"]["unused_skills"],
         report["findings"]["domain_fit"],
+        report["findings"]["lane_ideation"],
     )
     return report
 

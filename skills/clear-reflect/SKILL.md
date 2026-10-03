@@ -60,6 +60,19 @@ The report also includes a **domain pressure** list: unassigned domains ranked b
 
 A profile with no domain assignment in the map is audited as generalist and is never flagged for using anything.
 
+### Lane ideation
+
+Discover lane-split candidates from the work itself. The detector fingerprints every session from state.db (tool-name mix, normalized command shapes, path prefixes from file arguments, repo roots, skills opened), clusters those fingerprints over weekly windows using Jaccard similarity on top-N signal terms, and reports coherent, recurrent, volume-sufficient, misplaced clusters as candidates.
+
+Four gates, all must hold:
+
+1. **Coherent:** the cluster's dominant signal appears in at least half of its sessions.
+2. **Recurrent:** the cluster appears in two or more consecutive weekly windows, measured from message timestamps.
+3. **Volume:** at least three sessions or one thousand tokens in the cluster.
+4. **Misplaced:** the majority of the cluster's sessions ran in profiles whose domain does not match the cluster's inferred domain.
+
+The report includes each candidate's dominant signals, session count, which profiles the sessions ran in, and paste-ready YAML for the operator to add under `candidates:` in the domain map. The detector proposes, never applies.
+
 ## On each finding
 
 1. Read the report and the affected session or run record.
