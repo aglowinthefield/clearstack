@@ -7,11 +7,14 @@ Proposes, never applies. Emit a machine-readable report and a short human summar
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+
+import yaml
 
 
 DEFAULT_STATE_DB = Path.home() / ".hermes" / "state.db"
@@ -521,10 +524,313 @@ def mine_unused_skills(
 
 
 # ---------------------------------------------------------------------------
+# Domain-fit detector
+# ---------------------------------------------------------------------------
+
+DEFAULT_DOMAIN_MAP = Path(__file__).resolve().parent.parent / "references" / "domain-map.yaml"
+
+
+def load_domain_map(path):
+    """Load and parse the domain map YAML.
+
+    Returns (domain_map_dict, error_string).  The dict has keys:
+      version: int
+      domains: dict of domain_name -> {
+          profiles: list[str],
+          skills: set[str],
+          signals: list[compiled_regex],
+      }
+    Also adds derived lookups:
+      profile_domain: dict of profile_name -> domain_name
+      assigned_profiles: set of profile names that belong to a domain
+    """
+    if not path.exists():
+        return None, f"domain map not found at {path}"
+    try:
+        text = path.read_text(encoding="utf-8")
+        data = yaml.safe_load(text)
+    except Exception as e:
+        return None, f"could not parse domain map: {e}"
+
+    if not isinstance(data, dict):
+        return None, "domain map root is not a dict"
+
+    raw_domains = data.get("domains", {})
+    if not isinstance(raw_domains, dict):
+        return None, "domain map 'domains' key is not a dict"
+
+    domains = {}
+    profile_domain = {}
+    assigned_profiles = set()
+
+    for domain_name, domain_info in raw_domains.items():
+        if not isinstance(domain_info, dict):
+            continue
+        profiles = domain_info.get("profiles", []) or []
+        skills = set(domain_info.get("skills", []) or [])
+        signals = []
+        for pattern in domain_info.get("signals", []) or []:
+            try:
+                signals.append(re.compile(pattern))
+            except re.error:
+                continue
+        domains[domain_name] = {
+            "profiles": profiles,
+            "skills": skills,
+            "signals": signals,
+        }
+        for profile in profiles:
+            profile_domain[profile] = domain_name
+            assigned_profiles.add(profile)
+
+    return {
+        "version": data.get("version", 1),
+        "domains": domains,
+        "profile_domain": profile_domain,
+        "assigned_profiles": assigned_profiles,
+    }, None
+
+
+def _domain_for_skill(skill_name, domains):
+    """Return the domain name that owns a skill, or None."""
+    for domain_name, info in domains.items():
+        if skill_name in info["skills"]:
+            return domain_name
+    return None
+
+
+def _collect_cross_domain_skill_use(db_path, domains, profile_domain, skills_dir):
+    """Return list of cross-domain skill use findings from a single state db."""
+    findings = []
+    conn, _ = connect_db(db_path)
+    if conn is None:
+        return findings
+    try:
+        cur = conn.execute(
+            """
+            SELECT session_id, id, tool_calls FROM messages
+            WHERE role = 'assistant' AND tool_calls IS NOT NULL
+            """
+        )
+        for row in cur:
+            for _, tool_name, args in parse_tool_calls(row["tool_calls"]):
+                skill_name = None
+                if tool_name == "skill_view" and isinstance(args, dict):
+                    skill_name = args.get("name")
+                elif tool_name == "skill_manage" and isinstance(args, dict):
+                    ops = args.get("operations", [])
+                    if isinstance(ops, list):
+                        for op in ops:
+                            if isinstance(op, dict):
+                                skill_name = op.get("name")
+                                if skill_name:
+                                    break
+                if not skill_name:
+                    continue
+                skill_domain = _domain_for_skill(skill_name, domains)
+                if skill_domain and skill_domain != profile_domain:
+                    findings.append({
+                        "session_id": row["session_id"],
+                        "message_id": row["id"],
+                        "skill": skill_name,
+                        "skill_domain": skill_domain,
+                    })
+    finally:
+        conn.close()
+    return findings
+
+
+def _collect_cross_domain_signals(db_path, domains, profile_domain):
+    """Return dict of foreign_domain -> list of hit findings from terminal history."""
+    hits = defaultdict(list)
+    conn, _ = connect_db(db_path)
+    if conn is None:
+        return hits
+    try:
+        cur = conn.execute(
+            """
+            SELECT session_id, id, tool_calls FROM messages
+            WHERE role = 'assistant' AND tool_calls IS NOT NULL
+            """
+        )
+        for row in cur:
+            for _, tool_name, args in parse_tool_calls(row["tool_calls"]):
+                if tool_name != "terminal" or not isinstance(args, dict):
+                    continue
+                cmd = args.get("command", "")
+                if not isinstance(cmd, str):
+                    continue
+                for domain_name, info in domains.items():
+                    if domain_name == profile_domain:
+                        continue
+                    for rx in info["signals"]:
+                        if rx.search(cmd):
+                            hits[domain_name].append({
+                                "session_id": row["session_id"],
+                                "message_id": row["id"],
+                                "command": cmd,
+                                "matched_signal": rx.pattern,
+                            })
+                            break
+    finally:
+        conn.close()
+    return hits
+
+
+def _collect_routing_mismatches(boards_dir, domains, profile_domain_map):
+    """Return list of kanban cards whose signals match one domain but are assigned to another."""
+    findings = []
+    if not boards_dir.exists():
+        return findings
+
+    for board_path in boards_dir.iterdir():
+        db_file = board_path / "kanban.db"
+        if not db_file.exists():
+            continue
+        conn, _ = connect_db(db_file)
+        if conn is None:
+            continue
+        try:
+            cur = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'"
+            )
+            if not cur.fetchone():
+                continue
+            cur = conn.execute(
+                "SELECT id, title, body, assignee FROM tasks WHERE assignee IS NOT NULL"
+            )
+            for row in cur:
+                text = f"{row['title'] or ''}\n{row['body'] or ''}"
+                matched_domains = []
+                for domain_name, info in domains.items():
+                    for rx in info["signals"]:
+                        if rx.search(text):
+                            matched_domains.append(domain_name)
+                            break
+                if not matched_domains:
+                    continue
+                assignee = row["assignee"]
+                assignee_domain = profile_domain_map.get(assignee)
+                for matched in matched_domains:
+                    if matched != assignee_domain:
+                        findings.append({
+                            "board": board_path.name,
+                            "task_id": row["id"],
+                            "matched_domain": matched,
+                            "assignee": assignee,
+                            "assignee_domain": assignee_domain,
+                        })
+        finally:
+            conn.close()
+    return findings
+
+
+def mine_domain_fit(
+    domain_map_path,
+    skills_dir,
+    state_db_path,
+    profile_dbs_dir,
+    boards_dir,
+):
+    """Audit whether profiles stay in their assigned domains."""
+    domain_map, error = load_domain_map(domain_map_path)
+    if error:
+        return {"note": error, "profiles": [], "domain_pressure": []}
+
+    domains = domain_map["domains"]
+    profile_domain_map = domain_map["profile_domain"]
+    assigned = domain_map["assigned_profiles"]
+    all_skills = enumerate_skills(skills_dir)
+
+    profile_results = []
+    domain_pressure = defaultdict(int)
+
+    # Audit default profile (state_db_path)
+    profile_dbs = [("default", state_db_path)]
+
+    if profile_dbs_dir.exists():
+        for profile_dir in profile_dbs_dir.iterdir():
+            profile_db = profile_dir / "state.db"
+            if profile_db.exists():
+                profile_dbs.append((profile_dir.name, profile_db))
+
+    for profile_name, db_path in profile_dbs:
+        domain_name = profile_domain_map.get(profile_name)
+        if domain_name is None:
+            # Generalist: never flagged, but contributes to domain pressure
+            cross_skill = []
+            cross_signals = defaultdict(list)
+            used_skills = set()
+            domain_skills = set()
+        else:
+            domain_skills = domains[domain_name]["skills"]
+            used_skills = _collect_used_skills_from_db(db_path, skills_dir)
+            cross_skill = _collect_cross_domain_skill_use(
+                db_path, domains, domain_name, skills_dir
+            )
+            cross_signals = _collect_cross_domain_signals(db_path, domains, domain_name)
+
+            # Add unassigned-domain signal hits to domain pressure
+            for foreign_domain, hits in cross_signals.items():
+                if foreign_domain not in profile_domain_map.values():
+                    domain_pressure[foreign_domain] += len(hits)
+
+        # Compute catalog cost for used vs unused domain skills
+        used_domain_skills = used_skills & domain_skills
+        unused_domain_skills = domain_skills - used_skills
+        used_cost = sum(
+            all_skills[s]["catalog_cost"] for s in used_domain_skills if s in all_skills
+        )
+        unused_cost = sum(
+            all_skills[s]["catalog_cost"] for s in unused_domain_skills if s in all_skills
+        )
+
+        profile_results.append({
+            "profile": profile_name,
+            "domain": domain_name,
+            "domain_skills_count": len(domain_skills),
+            "used_domain_skills_count": len(used_domain_skills),
+            "unused_domain_skills_count": len(unused_domain_skills),
+            "used_domain_cost": used_cost,
+            "unused_domain_cost": unused_cost,
+            "cross_domain_skill_use": cross_skill,
+            "cross_domain_signals": dict(cross_signals),
+        })
+
+    # Also scan generalist profiles for unassigned-domain pressure
+    for profile_name, db_path in profile_dbs:
+        if profile_name in assigned:
+            continue
+        generalist_signals = _collect_cross_domain_signals(db_path, domains, None)
+        for foreign_domain, hits in generalist_signals.items():
+            if foreign_domain not in profile_domain_map.values():
+                domain_pressure[foreign_domain] += len(hits)
+
+    # Domain pressure ranking
+    pressure_list = sorted(
+        [{"domain": d, "hits": h} for d, h in domain_pressure.items()],
+        key=lambda x: x["hits"],
+        reverse=True,
+    )
+
+    # Routing mismatches across all boards
+    routing_mismatches = _collect_routing_mismatches(boards_dir, domains, profile_domain_map)
+
+    return {
+        "note": None,
+        "map_version": domain_map["version"],
+        "map_path": str(domain_map_path),
+        "profiles": profile_results,
+        "domain_pressure": pressure_list,
+        "routing_mismatches": routing_mismatches,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
 
-def emit_summary(oversized, repeats, unused):
+def emit_summary(oversized, repeats, unused, domain_fit):
     """Return a short human-readable summary string."""
     lines = []
     lines.append(
@@ -566,11 +872,40 @@ def emit_summary(oversized, repeats, unused):
         if unused["keep_list"]:
             lines.append(f"  keep list: {', '.join(k['name'] for k in unused['keep_list'])}")
 
+    # Domain fit
+    lines.append("")
+    note = domain_fit.get("note")
+    if note:
+        lines.append(f"Domain fit: {note}")
+    else:
+        lines.append("Domain fit:")
+        for p in domain_fit["profiles"]:
+            domain_label = p["domain"] or "generalist"
+            cross_skill = len(p["cross_domain_skill_use"])
+            cross_sig = sum(len(v) for v in p["cross_domain_signals"].values())
+            lines.append(
+                f"  {p['profile']} ({domain_label}) — "
+                f"{p['used_domain_skills_count']}/{p['domain_skills_count']} skills used, "
+                f"{cross_skill} cross-domain skill use, {cross_sig} cross-domain signal hits"
+            )
+        if domain_fit["domain_pressure"]:
+            lines.append("  Domain pressure (unassigned domains):")
+            for dp in domain_fit["domain_pressure"][:5]:
+                lines.append(f"    {dp['domain']}: {dp['hits']} signal hit(s)")
+        if domain_fit["routing_mismatches"]:
+            lines.append(f"  Routing mismatches: {len(domain_fit['routing_mismatches'])} finding(s)")
+            for rm in domain_fit["routing_mismatches"][:5]:
+                lines.append(
+                    f"    {rm['task_id']} on {rm['board']} — "
+                    f"matches {rm['matched_domain']}, assigned to {rm['assignee']}"
+                )
+
     return "\n".join(lines)
 
 
 def mine(state_db_path, runs_path, skills_dir=None, agent_hooks_dir=None,
-         scripts_dir=None, boards_dir=None, profile_dbs_dir=None):
+         scripts_dir=None, boards_dir=None, profile_dbs_dir=None,
+         domain_map_path=None):
     """Run all detectors and return the full report dict."""
     report = {
         "generated_at": None,
@@ -579,6 +914,7 @@ def mine(state_db_path, runs_path, skills_dir=None, agent_hooks_dir=None,
             "oversized_results": [],
             "repeated_commands": [],
             "unused_skills": {},
+            "domain_fit": {},
         },
         "summary": "",
     }
@@ -604,6 +940,7 @@ def mine(state_db_path, runs_path, skills_dir=None, agent_hooks_dir=None,
     scripts_dir = scripts_dir or DEFAULT_SCRIPTS_DIR
     boards_dir = boards_dir or DEFAULT_KANBAN_BOARDS_DIR
     profile_dbs_dir = profile_dbs_dir or (Path.home() / ".hermes" / "profiles")
+    domain_map_path = domain_map_path or DEFAULT_DOMAIN_MAP
 
     report["findings"]["unused_skills"] = mine_unused_skills(
         skills_dir,
@@ -614,10 +951,19 @@ def mine(state_db_path, runs_path, skills_dir=None, agent_hooks_dir=None,
         boards_dir,
     )
 
+    report["findings"]["domain_fit"] = mine_domain_fit(
+        domain_map_path,
+        skills_dir,
+        state_db_path,
+        profile_dbs_dir,
+        boards_dir,
+    )
+
     report["summary"] = emit_summary(
         report["findings"]["oversized_results"],
         report["findings"]["repeated_commands"],
         report["findings"]["unused_skills"],
+        report["findings"]["domain_fit"],
     )
     return report
 
@@ -664,6 +1010,12 @@ def main():
         help="Path to kanban boards directory",
     )
     parser.add_argument(
+        "--domain-map",
+        type=Path,
+        default=DEFAULT_DOMAIN_MAP,
+        help="Path to domain map YAML",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         help="Write output to this file",
@@ -683,6 +1035,7 @@ def main():
         agent_hooks_dir=args.agent_hooks_dir,
         scripts_dir=args.scripts_dir,
         boards_dir=args.boards_dir,
+        domain_map_path=args.domain_map,
     )
     report["generated_at"] = datetime.now(timezone.utc).isoformat()
 

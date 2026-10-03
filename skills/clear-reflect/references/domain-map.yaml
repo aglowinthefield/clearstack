@@ -1,0 +1,143 @@
+# Domain map v1. Declares each domain's profiles, skills, and command signals.
+# A domain owns skills and is served by profile(s). "signals" are command
+# patterns that mark work in that domain when seen in terminal history.
+# Unassigned domains have no lane yet: the audit watches for their signals
+# in other profiles' sessions to decide when they earn one.
+version: 1
+
+domains:
+
+  product:
+    # Silk/product implementation. Lane exists: scribe.
+    profiles: [scribe]
+    skills:
+      - github
+      - silk-agent-map
+      - silk-db-scripts
+      - silk-pr-shipping
+      - silk-username-validation
+      - silk-web-ui-fixes
+      - test-driven-development
+      - systematic-debugging
+      - simplify-code
+      - spike
+      - production-error-fix
+      - react-rerender-audit
+      - react-rerender-perf
+      - web-jank-investigation
+      - web-perf-review
+      - web-render-perf
+      - web-ssr-hydration
+      - js-bundle-budget
+      - typescript-monorepo-typecheck
+      - typescript-tooling-performance
+      - merge-conflict-resolution
+      - feature-gate-rollout
+      - generated-artifacts
+      - ci-deployments
+      - dogfood
+      - linear-issue-analysis
+      - requesting-code-review
+      - github-actions-run-analysis
+      - pr-state-reconciliation
+      - agents-md
+      - codebase-inspection
+      - parity-audit
+    signals:
+      - '\b(npm|npx|pnpm|node --|pytest|jest)\b'
+      - '\bapps/(web|api|ai-ingestion)\b'
+      - 'silk-remix'
+
+  review:
+    # Read-mostly judgment of others' work. Lane exists: jester.
+    profiles: [jester]
+    skills:
+      - sdlc-review
+      - github-actions-run-analysis
+      - production-error-fix
+      - systematic-debugging
+      - requesting-code-review
+    signals:
+      - '\bgh (pr|run) (view|diff|checks|review)\b'
+
+  investigate:
+    # Read-only research and diagnosis. Lane exists: page.
+    profiles: [page]
+    skills:
+      - grounded-citations
+      - blocked-page-recovery
+      - model-eval-planning
+      - linear-issue-analysis
+      - codebase-inspection
+    signals:
+      - '\bgh (issue|pr) view\b'
+
+  orchestration:
+    # Decomposing and routing work. Lane exists: princess.
+    profiles: [princess]
+    skills:
+      - hermes-kanban
+      - hermes-project-kanban
+      - agent-multiplexing
+      - kanban-state-reconciliation
+      - collective-wisdom-install
+      - weekly-review-planning
+      - workday-activity-review
+      - adr-authoring
+    signals:
+      - '\bhermes kanban\b'
+
+  infra:
+    # Cloudflare, deploys, prod data. NO LANE YET: audit watches for these
+    # signals in other profiles to decide when this domain earns one.
+    profiles: []
+    skills:
+      - cloudflare
+      - wrangler
+      - durable-objects
+      - agents-sdk
+      - neon-branch-environments
+      - prod-data-backfill
+      - prod-job-queue-ops
+      - local-service-exposure
+      - silk-promotion-risk
+    signals:
+      - '\b(fly|flyctl|wrangler|doppler|neon|kubectl|terraform)\b'
+      - '\bsystemctl\b'
+
+  home:
+    # This machine, dotfiles, Hermes itself. NO LANE YET.
+    profiles: []
+    skills:
+      - chezmoi
+      - hermes-agent
+      - hermes-profile-config
+      - hermes-source-changes
+      - hermes-agent-skill-authoring
+      - external-agent-skills
+      - agent-skills-repo
+      - inspecting-hermes-desktop-dom
+      - node-inspect-debugger
+      - python-debugpy
+      - agent-home-recovery
+      - repo-docs-hygiene
+    signals:
+      - '\bchezmoi\b'
+      - '\bhermes (config|skills|plugins|cron|gateway|update)\b'
+      - '~/\.hermes'
+
+  generalist:
+    # Interactive default profile. Everything unmatched lands here.
+    profiles: [default]
+    skills:
+      - humanizer
+      - maps
+      - box
+      - apple-reminders
+      - claude-code
+      - codex
+      - opencode
+      - computer-use
+      - codiff
+      - hermes-kanban
+    signals: []

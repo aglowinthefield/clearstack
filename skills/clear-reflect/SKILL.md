@@ -45,6 +45,21 @@ Flag the same normalized command run 3+ times in one session. When the repeats s
 
 Flag installed skills that never appear in tool-call history (`skill_view`, `skill_manage`, `read_file`/`patch`/`search_files`/`write_file` under a skills directory) across the default state db and every profile state db, and are not referenced by agent-hooks, scripts, or kanban card `skills` pins. Reports per-skill catalog cost (name plus description length) and total cost so the operator sees prune candidates. A keep-list inside the mine script marks seasonal skills as keep-only; the detector proposes, never uninstalls.
 
+### Domain fit
+
+Audit whether domain-separated agents stay in their domains. The detector reads `references/domain-map.yaml`, which declares each domain's profiles, skills, and command signals. Pass `--domain-map` to override the map path.
+
+Four checks, per profile:
+
+1. **Catalog cost and used-vs-unused skills.** Reuses the per-profile skill-usage machinery to show how many of a domain's skills each lane actually uses.
+2. **Cross-domain skill use.** A lane opening a skill owned by another domain (via `skill_view` or `skill_manage`).
+3. **Cross-domain work.** Another domain's command signals in a lane's terminal tool history (regex match against `tool_calls` in each profile's state db).
+4. **Routing mismatch.** Kanban cards whose title or body match one domain's signals but are assigned to a profile in another domain (across all board dbs).
+
+The report also includes a **domain pressure** list: unassigned domains ranked by signal hits in other profiles. This is the evidence for when a new domain earns its own lane.
+
+A profile with no domain assignment in the map is audited as generalist and is never flagged for using anything.
+
 ## On each finding
 
 1. Read the report and the affected session or run record.

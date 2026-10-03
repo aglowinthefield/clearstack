@@ -553,5 +553,288 @@ class UnusedSkillsTest(unittest.TestCase):
         self.assertTrue(result["never_used_cost"] > 0)
 
 
+class DomainFitTest(unittest.TestCase):
+    def _make_domain_map(self, td, domains):
+        """Create a temporary domain map YAML.
+
+        domains: dict of domain_name -> {"profiles": [...], "skills": [...], "signals": [...]}
+        """
+        map_path = Path(td) / "domain-map.yaml"
+        data = {"version": 1, "domains": {}}
+        for name, info in domains.items():
+            data["domains"][name] = {
+                "profiles": info.get("profiles", []),
+                "skills": info.get("skills", []),
+                "signals": info.get("signals", []),
+            }
+        import yaml
+        map_path.write_text(yaml.dump(data))
+        return map_path
+
+    def _make_state_db(self, td, tool_calls_rows):
+        """Create a temporary state db with tool_calls rows."""
+        db_path = Path(td) / "state.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT,
+                tool_call_id TEXT,
+                tool_calls TEXT,
+                tool_name TEXT,
+                _compressed_summary INTEGER NOT NULL DEFAULT 0,
+                timestamp REAL DEFAULT 0
+            )
+            """
+        )
+        for session_id, msg_id, tc_json in tool_calls_rows:
+            conn.execute(
+                "INSERT INTO messages (id, session_id, role, tool_calls) VALUES (?, ?, 'assistant', ?)",
+                (msg_id, session_id, tc_json),
+            )
+        conn.commit()
+        conn.close()
+        return db_path
+
+    def _make_skills_dir(self, td, skills):
+        skills_dir = Path(td) / "skills"
+        for name, description in skills.items():
+            skill_dir = skills_dir / name
+            skill_dir.mkdir(parents=True)
+            frontmatter = f"---\nname: {name}\ndescription: \"{description}\"\n---\n"
+            (skill_dir / "SKILL.md").write_text(frontmatter)
+        return skills_dir
+
+    def test_cross_domain_skill_use_detected(self):
+        with tempfile.TemporaryDirectory() as td:
+            map_path = self._make_domain_map(td, {
+                "product": {"profiles": ["scribe"], "skills": ["alpha"], "signals": []},
+                "infra": {"profiles": [], "skills": ["beta"], "signals": []},
+            })
+            skills_dir = self._make_skills_dir(td, {"alpha": "A", "beta": "B"})
+            state_db = self._make_state_db(td, [
+                ("s1", 1, json.dumps([{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "skill_view", "arguments": '{"name": "beta"}'},
+                }])),
+            ])
+            profiles_dir = Path(td) / "profiles"
+            profile_dir = profiles_dir / "scribe"
+            profile_dir.mkdir(parents=True)
+            profile_db = profile_dir / "state.db"
+            import shutil
+            shutil.copy(state_db, profile_db)
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, profiles_dir, Path(td) / "boards"
+            )
+
+        self.assertIsNone(result["note"])
+        scribe = next(p for p in result["profiles"] if p["profile"] == "scribe")
+        self.assertEqual(len(scribe["cross_domain_skill_use"]), 1)
+        self.assertEqual(scribe["cross_domain_skill_use"][0]["skill"], "beta")
+        self.assertEqual(scribe["cross_domain_skill_use"][0]["skill_domain"], "infra")
+
+    def test_signal_matching_in_terminal_history(self):
+        with tempfile.TemporaryDirectory() as td:
+            map_path = self._make_domain_map(td, {
+                "product": {"profiles": ["scribe"], "skills": [], "signals": []},
+                "infra": {"profiles": [], "skills": [], "signals": [r"\bwrangler\b"]},
+            })
+            skills_dir = self._make_skills_dir(td, {})
+            state_db = self._make_state_db(td, [
+                ("s1", 1, json.dumps([{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "terminal", "arguments": '{"command": "wrangler deploy"}'},
+                }])),
+            ])
+            profiles_dir = Path(td) / "profiles"
+            profile_dir = profiles_dir / "scribe"
+            profile_dir.mkdir(parents=True)
+            profile_db = profile_dir / "state.db"
+            import shutil
+            shutil.copy(state_db, profile_db)
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, profiles_dir, Path(td) / "boards"
+            )
+
+        scribe = next(p for p in result["profiles"] if p["profile"] == "scribe")
+        self.assertIn("infra", scribe["cross_domain_signals"])
+        self.assertEqual(len(scribe["cross_domain_signals"]["infra"]), 1)
+        self.assertEqual(scribe["cross_domain_signals"]["infra"][0]["command"], "wrangler deploy")
+
+    def test_routing_mismatch(self):
+        with tempfile.TemporaryDirectory() as td:
+            map_path = self._make_domain_map(td, {
+                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"silk-remix"]},
+                "review": {"profiles": ["jester"], "skills": [], "signals": []},
+            })
+            skills_dir = self._make_skills_dir(td, {})
+            state_db = self._make_state_db(td, [])
+            boards_dir = Path(td) / "boards"
+            board_dir = boards_dir / "test"
+            board_dir.mkdir(parents=True)
+            db_path = board_dir / "kanban.db"
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    body TEXT,
+                    assignee TEXT,
+                    status TEXT,
+                    skills TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO tasks (id, title, body, assignee, status) VALUES (?, ?, ?, ?, ?)",
+                ("t1", "Fix silk-remix build", "Body", "jester", "running"),
+            )
+            conn.commit()
+            conn.close()
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, Path(td) / "profiles", boards_dir
+            )
+
+        self.assertEqual(len(result["routing_mismatches"]), 1)
+        self.assertEqual(result["routing_mismatches"][0]["task_id"], "t1")
+        self.assertEqual(result["routing_mismatches"][0]["matched_domain"], "product")
+        self.assertEqual(result["routing_mismatches"][0]["assignee"], "jester")
+
+    def test_unassigned_domain_pressure_ranking(self):
+        with tempfile.TemporaryDirectory() as td:
+            map_path = self._make_domain_map(td, {
+                "product": {"profiles": ["scribe"], "skills": [], "signals": []},
+                "infra": {"profiles": [], "skills": [], "signals": [r"\bwrangler\b"]},
+                "home": {"profiles": [], "skills": [], "signals": [r"\bchezmoi\b"]},
+            })
+            skills_dir = self._make_skills_dir(td, {})
+            state_db = self._make_state_db(td, [
+                ("s1", 1, json.dumps([{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "terminal", "arguments": '{"command": "wrangler deploy"}'},
+                }])),
+                ("s1", 2, json.dumps([{
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "terminal", "arguments": '{"command": "chezmoi apply"}'},
+                }])),
+                ("s1", 3, json.dumps([{
+                    "id": "c3",
+                    "type": "function",
+                    "function": {"name": "terminal", "arguments": '{"command": "wrangler tail"}'},
+                }])),
+            ])
+            profiles_dir = Path(td) / "profiles"
+            profile_dir = profiles_dir / "scribe"
+            profile_dir.mkdir(parents=True)
+            profile_db = profile_dir / "state.db"
+            # Create empty profile db so pressure comes only from default state db
+            conn = sqlite3.connect(profile_db)
+            conn.execute(
+                """
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT,
+                    tool_call_id TEXT,
+                    tool_calls TEXT,
+                    tool_name TEXT,
+                    _compressed_summary INTEGER NOT NULL DEFAULT 0,
+                    timestamp REAL DEFAULT 0
+                )
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, profiles_dir, Path(td) / "boards"
+            )
+
+        pressure = result["domain_pressure"]
+        self.assertEqual(len(pressure), 2)
+        self.assertEqual(pressure[0]["domain"], "infra")
+        self.assertEqual(pressure[0]["hits"], 2)
+        self.assertEqual(pressure[1]["domain"], "home")
+        self.assertEqual(pressure[1]["hits"], 1)
+
+    def test_missing_map_handled_gracefully(self):
+        with tempfile.TemporaryDirectory() as td:
+            map_path = Path(td) / "missing.yaml"
+            skills_dir = self._make_skills_dir(td, {})
+            state_db = self._make_state_db(td, [])
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, Path(td) / "profiles", Path(td) / "boards"
+            )
+
+        self.assertIn("not found", result["note"])
+        self.assertEqual(result["profiles"], [])
+        self.assertEqual(result["domain_pressure"], [])
+
+    def test_generalist_never_flagged(self):
+        with tempfile.TemporaryDirectory() as td:
+            map_path = self._make_domain_map(td, {
+                "product": {"profiles": ["scribe"], "skills": ["alpha"], "signals": []},
+            })
+            skills_dir = self._make_skills_dir(td, {"alpha": "A", "beta": "B"})
+            state_db = self._make_state_db(td, [
+                ("s1", 1, json.dumps([{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "skill_view", "arguments": '{"name": "alpha"}'},
+                }])),
+            ])
+            profiles_dir = Path(td) / "profiles"
+            generalist_dir = profiles_dir / "generalist"
+            generalist_dir.mkdir(parents=True)
+            generalist_db = generalist_dir / "state.db"
+            import shutil
+            shutil.copy(state_db, generalist_db)
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, profiles_dir, Path(td) / "boards"
+            )
+
+        gen = next(p for p in result["profiles"] if p["profile"] == "generalist")
+        self.assertIsNone(gen["domain"])
+        self.assertEqual(len(gen["cross_domain_skill_use"]), 0)
+        self.assertEqual(len(gen["cross_domain_signals"]), 0)
+
+    def test_profile_db_aggregation_includes_default(self):
+        with tempfile.TemporaryDirectory() as td:
+            map_path = self._make_domain_map(td, {
+                "product": {"profiles": ["scribe"], "skills": ["alpha"], "signals": []},
+            })
+            skills_dir = self._make_skills_dir(td, {"alpha": "A"})
+            state_db = self._make_state_db(td, [])
+            profiles_dir = Path(td) / "profiles"
+            profile_dir = profiles_dir / "scribe"
+            profile_dir.mkdir(parents=True)
+            profile_db = profile_dir / "state.db"
+            import shutil
+            shutil.copy(state_db, profile_db)
+
+            result = mine_module.mine_domain_fit(
+                map_path, skills_dir, state_db, profiles_dir, Path(td) / "boards"
+            )
+
+        profile_names = {p["profile"] for p in result["profiles"]}
+        self.assertIn("default", profile_names)
+        self.assertIn("scribe", profile_names)
+
+
 if __name__ == "__main__":
     unittest.main()
