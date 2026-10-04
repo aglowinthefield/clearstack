@@ -97,6 +97,11 @@ DEFAULT_SCRIPTS_DIR = Path.home() / ".hermes" / "scripts"
 DEFAULT_KANBAN_BOARDS_DIR = Path.home() / ".hermes" / "kanban" / "boards"
 SIZE_THRESHOLD = 20000
 REPEAT_MIN_COUNT = 3
+# Context-churn detector thresholds.
+CHURN_MIN_RUNS = 3  # card is churned at this many worker runs
+AMPLIFY_MIN_RATIO = 200  # input-side tokens per output token
+AMPLIFY_MIN_INPUT_SIDE = 1_000_000  # ... and at least this much absolute volume
+KANBAN_TASK_RE = re.compile(r"kanban task (t_[0-9a-f]+)")
 
 # Seasonal or project-bound skills the detector reports but marks keep.
 # Edit this list in place; the detector proposes, never uninstalls.
@@ -333,6 +338,203 @@ def mine_repeats(conn, min_count=REPEAT_MIN_COUNT):
 
     findings.sort(key=lambda x: x["count"], reverse=True)
     return findings
+
+
+# ---------------------------------------------------------------------------
+# Context-churn detector
+# ---------------------------------------------------------------------------
+
+def _state_db_sources(state_db_path, profile_dbs_dir):
+    """Return [(label, path)] for the default state db and every profile state db."""
+    sources = [("default", Path(state_db_path))]
+    profile_dbs_dir = Path(profile_dbs_dir)
+    if profile_dbs_dir.is_dir():
+        for child in sorted(profile_dbs_dir.iterdir()):
+            db = child / "state.db"
+            if child.is_dir() and db.is_file():
+                sources.append((child.name, db))
+    return sources
+
+
+def _first_user_message_map(conn):
+    """Map session_id -> content of its earliest user message, in one scan."""
+    out = {}
+    cur = conn.execute(
+        "SELECT m.session_id, m.content FROM messages m"
+        " JOIN (SELECT session_id, MIN(id) AS mid FROM messages"
+        "       WHERE role = 'user' GROUP BY session_id) t"
+        " ON m.session_id = t.session_id AND m.id = t.mid"
+    )
+    for row in cur:
+        out[row["session_id"]] = row["content"] or ""
+    return out
+
+
+def _board_task_titles(boards_dir):
+    """Map task_id -> {\"title\", \"board\"} across every board db."""
+    titles = {}
+    boards_dir = Path(boards_dir)
+    if not boards_dir.is_dir():
+        return titles
+    for board in sorted(boards_dir.iterdir()):
+        db = board / "kanban.db"
+        if not board.is_dir() or not db.is_file():
+            continue
+        try:
+            conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+            try:
+                for tid, title in conn.execute("SELECT id, title FROM tasks"):
+                    titles.setdefault(tid, {"title": title, "board": board.name})
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            continue
+    return titles
+
+
+def mine_context_churn(state_db_path, profile_dbs_dir, boards_dir):
+    """Measure restart churn, resend amplification, and kanban_show refetch volume.
+
+    Restart churn: group kanban worker sessions into cards via the first user
+    message ('work kanban task t_x'); cards with CHURN_MIN_RUNS+ runs hold the
+    tokens that tighter scoping or durable handoffs would avoid.
+    Resend amplification: input-side tokens (fresh + cache read + cache write)
+    per output token, per session. Every turn resends the whole conversation,
+    so a high ratio marks runs where the context did the spending.
+    kanban_show refetch: card bodies and handoffs re-fetched mid-run land in
+    context and are resent on every later turn.
+    """
+    finding = {
+        "note": None,
+        "dbs_scanned": [],
+        "sessions_with_usage": 0,
+        "kanban_sessions": 0,
+        "cards_seen": 0,
+        "multi_run": {"min_runs": CHURN_MIN_RUNS, "cards": 0, "tokens": 0,
+                      "token_share_pct": 0.0, "top_cards": []},
+        "amplification": {"min_ratio": AMPLIFY_MIN_RATIO, "median_ratio": 0.0,
+                          "sessions_above": 0, "worst_sessions": []},
+        "kanban_show_refetch": {"calls": 0, "sessions_with_multiple": 0,
+                                "approx_tokens": 0},
+        "proposals": [],
+    }
+
+    cards = defaultdict(lambda: {"runs": 0, "tokens": 0, "profiles": set()})
+    ratios = []
+    worst = []
+    total_card_tokens = 0
+    ks_calls = 0
+    ks_chars = 0
+    ks_multi = 0
+
+    for label, db in _state_db_sources(state_db_path, profile_dbs_dir):
+        conn, note = connect_db(db)
+        if conn is None:
+            continue
+        try:
+            finding["dbs_scanned"].append(label)
+            sessions = conn.execute(
+                "SELECT id, source, input_tokens, output_tokens,"
+                " cache_read_tokens, cache_write_tokens FROM sessions"
+                " WHERE input_tokens + cache_read_tokens + cache_write_tokens > 0"
+            ).fetchall()
+            finding["sessions_with_usage"] += len(sessions)
+            first_user = _first_user_message_map(conn)
+            for s in sessions:
+                in_side = (s["input_tokens"] or 0) + (s["cache_read_tokens"] or 0) \
+                    + (s["cache_write_tokens"] or 0)
+                out = s["output_tokens"] or 0
+                ratio = in_side / max(out, 1)
+                ratios.append(ratio)
+                if ratio >= AMPLIFY_MIN_RATIO and in_side >= AMPLIFY_MIN_INPUT_SIDE:
+                    worst.append({
+                        "session_id": s["id"], "db": label,
+                        "input_side_tokens": in_side, "output_tokens": out,
+                        "ratio": round(ratio, 1),
+                    })
+                task = KANBAN_TASK_RE.search(first_user.get(s["id"], ""))
+                if task:
+                    finding["kanban_sessions"] += 1
+                    c = cards[task.group(1)]
+                    c["runs"] += 1
+                    c["tokens"] += in_side + out
+                    c["profiles"].add(label)
+                    total_card_tokens += in_side + out
+            ks = conn.execute(
+                "SELECT session_id, COUNT(*) AS n,"
+                " SUM(LENGTH(COALESCE(content, ''))) AS chars"
+                " FROM messages WHERE role = 'tool' AND tool_name = 'kanban_show'"
+                " GROUP BY session_id"
+            ).fetchall()
+            for row in ks:
+                ks_calls += row["n"]
+                ks_chars += row["chars"] or 0
+                if row["n"] > 1:
+                    ks_multi += 1
+        except sqlite3.Error:
+            continue
+        finally:
+            conn.close()
+
+    finding["cards_seen"] = len(cards)
+    multi = sorted((c for c in cards.items() if c[1]["runs"] >= CHURN_MIN_RUNS),
+                   key=lambda kv: -kv[1]["tokens"])
+    multi_tokens = sum(c["tokens"] for _, c in multi)
+    finding["multi_run"]["cards"] = len(multi)
+    finding["multi_run"]["tokens"] = multi_tokens
+    if total_card_tokens:
+        finding["multi_run"]["token_share_pct"] = round(
+            multi_tokens / total_card_tokens * 100, 1)
+    titles = _board_task_titles(boards_dir)
+    finding["multi_run"]["top_cards"] = [
+        {"task_id": tid,
+         "title": titles.get(tid, {}).get("title"),
+         "board": titles.get(tid, {}).get("board"),
+         "runs": c["runs"], "tokens": c["tokens"],
+         "profiles": sorted(c["profiles"])}
+        for tid, c in multi[:15]
+    ]
+
+    ratios.sort()
+    if ratios:
+        finding["amplification"]["median_ratio"] = round(
+            ratios[len(ratios) // 2], 1)
+    finding["amplification"]["sessions_above"] = len(worst)
+    finding["amplification"]["worst_sessions"] = sorted(
+        worst, key=lambda w: -w["input_side_tokens"])[:15]
+
+    finding["kanban_show_refetch"] = {
+        "calls": ks_calls,
+        "sessions_with_multiple": ks_multi,
+        "approx_tokens": ks_chars // 4,
+    }
+
+    if not finding["dbs_scanned"]:
+        finding["note"] = "no readable state dbs found"
+        return finding
+
+    if multi:
+        finding["proposals"].append(
+            f"{len(multi)} cards with {CHURN_MIN_RUNS}+ runs hold "
+            f"{finding['multi_run']['token_share_pct']}% of card tokens. "
+            "Route repeatedly blocked cards to triage earlier and persist "
+            "worker findings in durable handoff notes so a restart does not "
+            "re-read the same files."
+        )
+    if ks_calls:
+        finding["proposals"].append(
+            f"kanban_show returned ~{ks_chars // 4:,} tokens across {ks_calls:,} "
+            f"calls ({ks_multi:,} sessions fetched it more than once). Cap the "
+            "handoff history in worker_context or cache the card body in the "
+            "task workspace."
+        )
+    if worst:
+        finding["proposals"].append(
+            f"{len(worst)} sessions exceed {AMPLIFY_MIN_RATIO}x input-to-output. "
+            "Turn budgets and smaller tool results bend the turns-times-context "
+            "curve that drives this."
+        )
+    return finding
 
 
 # ---------------------------------------------------------------------------
@@ -930,7 +1132,8 @@ def mine_domain_fit(
 # Reporting
 # ---------------------------------------------------------------------------
 
-def emit_summary(oversized, repeats, unused, domain_fit, lane_ideation_data):
+def emit_summary(oversized, repeats, unused, domain_fit, lane_ideation_data,
+                 context_churn=None):
     """Return a short human-readable summary string."""
     lines = []
     lines.append(
@@ -1005,6 +1208,42 @@ def emit_summary(oversized, repeats, unused, domain_fit, lane_ideation_data):
     lines.append("")
     lines.append(lane_ideation.format_lane_ideation_summary(lane_ideation_data))
 
+    # Context churn
+    if context_churn is not None:
+        lines.append("")
+        note = context_churn.get("note")
+        if note:
+            lines.append(f"Context churn: {note}")
+        else:
+            mr = context_churn["multi_run"]
+            amp = context_churn["amplification"]
+            ks = context_churn["kanban_show_refetch"]
+            lines.append(
+                f"Context churn: {context_churn['kanban_sessions']} kanban runs, "
+                f"{context_churn['cards_seen']} cards"
+            )
+            lines.append(
+                f"  restart churn: {mr['cards']} cards with {mr['min_runs']}+ runs "
+                f"hold {mr['token_share_pct']}% of card tokens"
+            )
+            for c in mr["top_cards"][:5]:
+                title = (c["title"] or "")[:60]
+                lines.append(
+                    f"    {c['task_id']} — {c['runs']} runs, "
+                    f"{c['tokens']:,} tok — {title}"
+                )
+            lines.append(
+                f"  resend amplification: median {amp['median_ratio']}x "
+                f"input-to-output, {amp['sessions_above']} sessions above "
+                f"{amp['min_ratio']}x"
+            )
+            lines.append(
+                f"  kanban_show refetch: {ks['calls']:,} calls, ~{ks['approx_tokens']:,} tok, "
+                f"{ks['sessions_with_multiple']:,} sessions fetched more than once"
+            )
+            for p in context_churn["proposals"]:
+                lines.append(f"  proposal: {p}")
+
     return "\n".join(lines)
 
 
@@ -1020,6 +1259,7 @@ def mine(state_db_path, runs_path, skills_dir=None, agent_hooks_dir=None,
             "repeated_commands": [],
             "unused_skills": {},
             "domain_fit": {},
+            "context_churn": {},
         },
         "summary": "",
     }
@@ -1069,12 +1309,17 @@ def mine(state_db_path, runs_path, skills_dir=None, agent_hooks_dir=None,
         domain_map, state_db_path, profile_dbs_dir
     )
 
+    report["findings"]["context_churn"] = mine_context_churn(
+        state_db_path, profile_dbs_dir, boards_dir
+    )
+
     report["summary"] = emit_summary(
         report["findings"]["oversized_results"],
         report["findings"]["repeated_commands"],
         report["findings"]["unused_skills"],
         report["findings"]["domain_fit"],
         report["findings"]["lane_ideation"],
+        report["findings"]["context_churn"],
     )
     return report
 

@@ -1192,8 +1192,111 @@ class DomainFitTest(unittest.TestCase):
         self.assertIn("scribe", profile_names)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class ContextChurnTest(unittest.TestCase):
+    def _make_session_db(self, db_path, sessions, messages):
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "CREATE TABLE sessions ("
+            " id TEXT PRIMARY KEY, source TEXT,"
+            " input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,"
+            " cache_read_tokens INTEGER DEFAULT 0, cache_write_tokens INTEGER DEFAULT 0)"
+        )
+        conn.execute(
+            "CREATE TABLE messages ("
+            " id INTEGER PRIMARY KEY, session_id TEXT, role TEXT,"
+            " content TEXT, tool_name TEXT)"
+        )
+        conn.executemany("INSERT INTO sessions VALUES (?,?,?,?,?,?)", sessions)
+        conn.executemany("INSERT INTO messages VALUES (?,?,?,?,?)", messages)
+        conn.commit()
+        conn.close()
+        return db_path
+
+    def _make_board(self, boards_dir, board="silk"):
+        board_dir = Path(boards_dir) / board
+        board_dir.mkdir(parents=True)
+        conn = sqlite3.connect(board_dir / "kanban.db")
+        conn.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT)")
+        conn.execute("INSERT INTO tasks VALUES ('t_aaa', 'Churned card')")
+        conn.execute("INSERT INTO tasks VALUES ('t_bbb', 'Quiet card')")
+        conn.commit()
+        conn.close()
+
+    def _fixture(self, td):
+        profiles_dir = Path(td) / "profiles"
+        scribe = profiles_dir / "scribe"
+        scribe.mkdir(parents=True)
+        sessions = [
+            # three runs of the same card: churned
+            ("w1", "kanban", 100_000, 1_000, 3_000_000, 50_000),
+            ("w2", "kanban", 100_000, 1_000, 3_000_000, 50_000),
+            ("w3", "kanban", 100_000, 1_000, 3_000_000, 50_000),
+            # one run of another card: quiet
+            ("w4", "kanban", 10_000, 5_000, 100_000, 0),
+        ]
+        messages = [
+            (1, "w1", "user", "work kanban task t_aaa", None),
+            (2, "w1", "tool", "card body", "kanban_show"),
+            (3, "w1", "tool", "card body again", "kanban_show"),
+            (4, "w2", "user", "work kanban task t_aaa", None),
+            (5, "w3", "user", "work kanban task t_aaa", None),
+            (6, "w4", "user", "work kanban task t_bbb", None),
+            (7, "w4", "tool", "card body", "kanban_show"),
+        ]
+        db = self._make_session_db(scribe / "state.db", sessions, messages)
+        boards_dir = Path(td) / "boards"
+        self._make_board(boards_dir)
+        return profiles_dir, boards_dir
+
+    def test_groups_runs_into_cards_and_flags_churn(self):
+        with tempfile.TemporaryDirectory() as td:
+            profiles_dir, boards_dir = self._fixture(td)
+            result = mine_module.mine_context_churn(
+                Path(td) / "missing.db", profiles_dir, boards_dir
+            )
+        self.assertIsNone(result["note"])
+        self.assertEqual(result["kanban_sessions"], 4)
+        self.assertEqual(result["cards_seen"], 2)
+        mr = result["multi_run"]
+        self.assertEqual(mr["cards"], 1)
+        top = mr["top_cards"][0]
+        self.assertEqual(top["task_id"], "t_aaa")
+        self.assertEqual(top["runs"], 3)
+        self.assertEqual(top["title"], "Churned card")
+        self.assertEqual(top["board"], "silk")
+        # t_aaa holds 9.45M of 9.56M card tokens
+        self.assertGreater(mr["token_share_pct"], 95)
+        self.assertTrue(any("triage" in p for p in result["proposals"]))
+
+    def test_counts_kanban_show_refetch(self):
+        with tempfile.TemporaryDirectory() as td:
+            profiles_dir, boards_dir = self._fixture(td)
+            result = mine_module.mine_context_churn(
+                Path(td) / "missing.db", profiles_dir, boards_dir
+            )
+        ks = result["kanban_show_refetch"]
+        self.assertEqual(ks["calls"], 3)  # two in w1, one in w4
+        self.assertEqual(ks["sessions_with_multiple"], 1)
+        self.assertGreater(ks["approx_tokens"], 0)
+
+    def test_flags_amplified_sessions(self):
+        with tempfile.TemporaryDirectory() as td:
+            profiles_dir, boards_dir = self._fixture(td)
+            result = mine_module.mine_context_churn(
+                Path(td) / "missing.db", profiles_dir, boards_dir
+            )
+        amp = result["amplification"]
+        self.assertEqual(amp["sessions_above"], 3)  # the three 3.15M-in / 1K-out runs
+        self.assertEqual(amp["worst_sessions"][0]["session_id"], "w1")
+        self.assertGreater(amp["median_ratio"], 0)
+
+    def test_note_when_no_dbs_readable(self):
+        with tempfile.TemporaryDirectory() as td:
+            result = mine_module.mine_context_churn(
+                Path(td) / "missing.db", Path(td) / "no-profiles", Path(td) / "no-boards"
+            )
+        self.assertEqual(result["note"], "no readable state dbs found")
+        self.assertEqual(result["proposals"], [])
 
 
 class YamlSubsetLoadTest(unittest.TestCase):

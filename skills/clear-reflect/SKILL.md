@@ -41,6 +41,16 @@ Flag tool results over 20K chars, grouped by tool name and command shape, so a g
 
 Flag the same normalized command run 3+ times in one session. When the repeats span a compaction event (a `_compressed_summary` message in the same session), they are flagged as compaction-adjacent: the signature of post-compaction state loss.
 
+### Context churn
+
+Measure where kanban card tokens actually go, across the default state db and every profile state db. Three signals:
+
+1. **Restart churn.** Worker sessions are grouped into cards by the first user message (`work kanban task t_x`). Cards with 3+ runs are churned: each restart re-reads the card and the same files from cold. The report gives the churned-card count, their share of all card tokens, and the top cards with titles and boards from the kanban board dbs.
+2. **Resend amplification.** Input-side tokens (fresh plus cache read plus cache write) per output token, per session. Every model call resends the whole conversation, so the ratio marks runs where context resend did the spending. Flagged above 200x and 1M input-side tokens.
+3. **kanban_show refetch.** Card bodies and handoffs re-fetched mid-run: call count, sessions that fetched more than once, and approximate tokens.
+
+Each signal ends in a proposal (triage routing, durable handoffs, worker_context caps, turn budgets). The detector proposes, never applies.
+
 ### Unused skills
 
 Flag installed skills that never appear in tool-call history (`skill_view`, `skill_manage`, `read_file`/`patch`/`search_files`/`write_file` under a skills directory) across the default state db and every profile state db, and are not referenced by agent-hooks, scripts, or kanban card `skills` pins. Reports per-skill catalog cost (name plus description length) and total cost so the operator sees prune candidates. A keep-list inside the mine script marks seasonal skills as keep-only; the detector proposes, never uninstalls.
