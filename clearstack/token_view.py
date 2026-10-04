@@ -1,9 +1,10 @@
 """Token-spend analytics view for the ClearStack dashboard.
 
-Reads Hermes state.db read-only and renders a self-contained HTML page
-with headline totals, model breakdowns, daily stacked bars, session-size
-buckets, surface breakdown, top sessions, tool mix, and system-prompt
-overhead anatomy.
+Reads the default Hermes state.db plus every profile state.db read-only
+(kanban workers record usage in their profile's db, not the default one)
+and renders a self-contained HTML page with headline totals, model
+breakdowns, daily stacked bars, session-size buckets, surface breakdown,
+top sessions, tool mix, and system-prompt overhead anatomy.
 """
 
 from html import escape
@@ -15,24 +16,48 @@ def _state_db_path():
     return Path.home() / ".hermes" / "state.db"
 
 
+def _profile_dbs_dir():
+    return Path.home() / ".hermes" / "profiles"
+
+
+def _db_sources():
+    """Return [(label, path)] for the default db and every profile state.db."""
+    sources = [("default", _state_db_path())]
+    profiles = _profile_dbs_dir()
+    if profiles.is_dir():
+        for child in sorted(profiles.iterdir()):
+            db = child / "state.db"
+            if child.is_dir() and db.is_file():
+                sources.append((child.name, db))
+    return sources
+
+
 _DAYS = 14
 
 
-def _with_db(func):
-    """Run *func* with a read-only state.db connection, or return empty dict on failure."""
-    db_path = _state_db_path()
-    if not db_path.is_file():
-        return {}
-    try:
-        uri = f"file:{db_path}?mode=ro"
-        conn = sqlite3.connect(uri, uri=True, timeout=5.0)
+def _with_dbs(func):
+    """Run *func(conn, label)* against each readable state db.
+
+    Return (sources, results): sources is the list of labels actually read,
+    results is the list of per-db return values in the same order.
+    """
+    sources = []
+    results = []
+    for label, db_path in _db_sources():
+        if not db_path.is_file():
+            continue
         try:
-            conn.execute("PRAGMA busy_timeout = 5000")
-            return func(conn)
-        finally:
-            conn.close()
-    except (OSError, sqlite3.Error):
-        return {}
+            uri = f"file:{db_path}?mode=ro"
+            conn = sqlite3.connect(uri, uri=True, timeout=5.0)
+            try:
+                conn.execute("PRAGMA busy_timeout = 5000")
+                results.append(func(conn, label))
+                sources.append(label)
+            finally:
+                conn.close()
+        except (OSError, sqlite3.Error):
+            continue
+    return sources, results
 
 
 def _fmt_tok(n):
@@ -60,142 +85,190 @@ def _headline_totals(conn):
         f" COALESCE(SUM(actual_cost_usd),0), COALESCE(SUM(estimated_cost_usd),0)"
         f" FROM session_model_usage WHERE last_seen > strftime('%s','now','-{_DAYS} days')",
     ).fetchone()
-    fresh, out, cache_r, cache_w, calls, act_cost, est_cost = row
-    cost = act_cost if act_cost else est_cost
     return {
-        "fresh_input": fresh,
-        "output": out,
-        "cache_read": cache_r,
-        "cache_write": cache_w,
-        "api_calls": calls,
-        "cost": cost,
-        "cost_is_actual": bool(act_cost),
+        "fresh_input": row[0],
+        "output": row[1],
+        "cache_read": row[2],
+        "cache_write": row[3],
+        "api_calls": row[4],
+        "actual_cost": row[5],
+        "estimated_cost": row[6],
     }
 
 
+def _merge_headline(parts):
+    out = {k: sum(p[k] for p in parts) for k in parts[0]}
+    out["cost"] = out["actual_cost"] if out["actual_cost"] else out["estimated_cost"]
+    out["cost_is_actual"] = bool(out["actual_cost"])
+    return out
+
+
 def _by_model(conn):
-    rows = conn.execute(
+    return conn.execute(
         f"SELECT model, SUM(input_tokens), SUM(output_tokens),"
         f" SUM(cache_read_tokens), SUM(api_call_count),"
         f" COALESCE(SUM(actual_cost_usd),0), COALESCE(SUM(estimated_cost_usd),0)"
         f" FROM session_model_usage"
         f" WHERE last_seen > strftime('%s','now','-{_DAYS} days')"
-        f" GROUP BY model ORDER BY SUM(input_tokens) DESC",
+        f" GROUP BY model",
     ).fetchall()
-    max_fresh = max((r[1] for r in rows), default=0)
+
+
+def _merge_by_model(parts):
+    merged = {}
+    for rows in parts:
+        for model, fresh, out, cr, calls, act, est in rows:
+            m = merged.setdefault(model or "unknown", [0, 0, 0, 0, 0.0, 0.0])
+            m[0] += fresh or 0
+            m[1] += out or 0
+            m[2] += cr or 0
+            m[3] += calls or 0
+            m[4] += act or 0
+            m[5] += est or 0
+    max_fresh = max((v[0] for v in merged.values()), default=0)
     return [
         {
-            "model": r[0] or "unknown",
-            "fresh": r[1],
-            "out": r[2],
-            "cache_read": r[3],
-            "calls": r[4],
-            "cost": (r[5] if r[5] else r[6]) or None,
-            "width_pct": (r[1] / max_fresh * 100) if max_fresh else 0,
+            "model": model,
+            "fresh": v[0],
+            "out": v[1],
+            "cache_read": v[2],
+            "calls": v[3],
+            "cost": (v[4] if v[4] else v[5]) or None,
+            "width_pct": (v[0] / max_fresh * 100) if max_fresh else 0,
         }
-        for r in rows
+        for model, v in sorted(merged.items(), key=lambda kv: -kv[1][0])
     ]
 
 
 def _daily_stacked(conn):
-    rows = conn.execute(
+    return conn.execute(
         f"SELECT date(datetime(s.started_at,'unixepoch')) as day,"
         f" smu.model, SUM(smu.input_tokens)"
         f" FROM session_model_usage smu"
         f" JOIN sessions s ON s.id = smu.session_id"
         f" WHERE s.started_at > strftime('%s','now','-{_DAYS} days')"
-        f" GROUP BY day, smu.model"
-        f" ORDER BY day, SUM(smu.input_tokens) DESC",
+        f" GROUP BY day, smu.model",
     ).fetchall()
+
+
+def _merge_daily(parts):
     days = {}
-    for day, model, fresh in rows:
-        days.setdefault(day, []).append({"model": model or "unknown", "fresh": fresh})
-    day_max = max(
-        (sum(m["fresh"] for m in models) for models in days.values()), default=0
-    )
+    for rows in parts:
+        for day, model, fresh in rows:
+            days.setdefault(day, {})
+            days[day][model or "unknown"] = days[day].get(model or "unknown", 0) + (fresh or 0)
+    day_max = max((sum(m.values()) for m in days.values()), default=0)
     _COLORS = ("#5b8def", "#e2b93b", "#4fae62", "#d2654f", "#8f6fc9", "#4fa8a8", "#c96a9a", "#999")
     model_colors = {}
-    color_idx = 0
-    for day, models in sorted(days.items()):
-        for m in models:
-            if m["model"] not in model_colors:
-                model_colors[m["model"]] = _COLORS[color_idx % len(_COLORS)]
-                color_idx += 1
+    for day in sorted(days):
+        for model in days[day]:
+            if model not in model_colors:
+                model_colors[model] = _COLORS[len(model_colors) % len(_COLORS)]
     return [
         {
             "day": day,
-            "total": sum(m["fresh"] for m in models),
+            "total": sum(models.values()),
             "segments": [
                 {
-                    "model": m["model"],
-                    "fresh": m["fresh"],
-                    "width_pct": (m["fresh"] / day_max * 100) if day_max else 0,
-                    "color": model_colors[m["model"]],
+                    "model": model,
+                    "fresh": fresh,
+                    "width_pct": (fresh / day_max * 100) if day_max else 0,
+                    "color": model_colors[model],
                 }
-                for m in models
+                for model, fresh in sorted(models.items(), key=lambda kv: -kv[1])
             ],
         }
         for day, models in sorted(days.items())
     ], list(model_colors.items())
 
 
-def _size_buckets(conn):
-    rows = conn.execute(
-        f"SELECT"
-        f" CASE WHEN message_count < 20 THEN '<20 msgs'"
-        f" WHEN message_count < 50 THEN '20-49'"
-        f" WHEN message_count < 100 THEN '50-99'"
-        f" WHEN message_count < 200 THEN '100-199'"
-        f" ELSE '200+' END as bucket,"
-        f" COUNT(*), SUM(input_tokens), SUM(cache_read_tokens)"
+_BUCKETS = ("<20 msgs", "20-49", "50-99", "100-199", "200+")
+
+
+def _bucket_for(message_count):
+    n = message_count or 0
+    if n < 20:
+        return 0
+    if n < 50:
+        return 1
+    if n < 100:
+        return 2
+    if n < 200:
+        return 3
+    return 4
+
+
+def _session_sizes(conn):
+    return conn.execute(
+        f"SELECT message_count, input_tokens, cache_read_tokens"
         f" FROM sessions"
-        f" WHERE started_at > strftime('%s','now','-{_DAYS} days')"
-        f" GROUP BY bucket"
-        f" ORDER BY MIN(message_count)",
+        f" WHERE started_at > strftime('%s','now','-{_DAYS} days')",
     ).fetchall()
-    max_fresh = max((r[2] for r in rows), default=0)
-    _COLORS = ("#5b8def", "#e2b93b", "#4fae62", "#d2654f", "#8f6fc9")
-    return [
-        {
-            "label": r[0],
-            "sessions": r[1],
-            "fresh": r[2],
-            "cache_read": r[3],
-            "width_pct": (r[2] / max_fresh * 100) if max_fresh else 0,
-            "color": _COLORS[i % len(_COLORS)],
-        }
-        for i, r in enumerate(rows)
+
+
+def _merge_size_buckets(parts):
+    buckets = [
+        {"label": label, "sessions": 0, "fresh": 0, "cache_read": 0}
+        for label in _BUCKETS
     ]
+    for rows in parts:
+        for message_count, fresh, cr in rows:
+            b = buckets[_bucket_for(message_count)]
+            b["sessions"] += 1
+            b["fresh"] += fresh or 0
+            b["cache_read"] += cr or 0
+    max_fresh = max((b["fresh"] for b in buckets), default=0)
+    _COLORS = ("#5b8def", "#e2b93b", "#4fae62", "#d2654f", "#8f6fc9")
+    for i, b in enumerate(buckets):
+        b["width_pct"] = (b["fresh"] / max_fresh * 100) if max_fresh else 0
+        b["color"] = _COLORS[i % len(_COLORS)]
+    return buckets
 
 
 def _by_surface(conn):
-    rows = conn.execute(
+    return conn.execute(
         f" SELECT COALESCE(source,'unknown'), COUNT(*), SUM(input_tokens),"
         f" SUM(output_tokens), SUM(cache_read_tokens),"
         f" COALESCE(SUM(actual_cost_usd),0), COALESCE(SUM(estimated_cost_usd),0)"
         f" FROM sessions"
         f" WHERE started_at > strftime('%s','now','-{_DAYS} days')"
-        f" GROUP BY source"
-        f" ORDER BY SUM(input_tokens) DESC",
+        f" GROUP BY source",
     ).fetchall()
-    max_fresh = max((r[2] for r in rows), default=0)
+
+
+def _merge_surface(parts, sources):
+    """Group by (source, db label). Profile dbs get a 'source · profile' label."""
+    merged = {}
+    for rows, label in zip(parts, sources):
+        for source, n, fresh, out, cr, act, est in rows:
+            display = source if label == "default" else f"{source} · {label}"
+            m = merged.setdefault(display, [0, 0, 0, 0, 0.0, 0.0])
+            m[0] += n or 0
+            m[1] += fresh or 0
+            m[2] += out or 0
+            m[3] += cr or 0
+            m[4] += act or 0
+            m[5] += est or 0
+    max_fresh = max((v[1] for v in merged.values()), default=0)
     _COLORS = ("#5b8def", "#e2b93b", "#4fae62", "#d2654f", "#8f6fc9", "#4fa8a8", "#c96a9a")
     return [
         {
-            "surface": r[0],
-            "sessions": r[1],
-            "fresh": r[2],
-            "out": r[3],
-            "cache_read": r[4],
-            "cost": (r[5] if r[5] else r[6]) or None,
-            "width_pct": (r[2] / max_fresh * 100) if max_fresh else 0,
+            "surface": display,
+            "sessions": v[0],
+            "fresh": v[1],
+            "out": v[2],
+            "cache_read": v[3],
+            "cost": (v[4] if v[4] else v[5]) or None,
+            "width_pct": (v[1] / max_fresh * 100) if max_fresh else 0,
             "color": _COLORS[i % len(_COLORS)],
         }
-        for i, r in enumerate(rows)
+        for i, (display, v) in enumerate(
+            sorted(merged.items(), key=lambda kv: -kv[1][1])[:15]
+        )
     ]
 
 
-def _top_sessions(conn):
+def _top_sessions(conn, label):
     rows = conn.execute(
         f" SELECT COALESCE(title,display_name,id), COALESCE(source,'unknown'),"
         f" date(datetime(started_at,'unixepoch')), message_count, api_call_count,"
@@ -208,6 +281,7 @@ def _top_sessions(conn):
         {
             "title": r[0],
             "source": r[1],
+            "db": label,
             "started": r[2],
             "msgs": r[3],
             "calls": r[4],
@@ -221,31 +295,46 @@ def _top_sessions(conn):
 
 
 def _tool_volume(conn):
-    rows = conn.execute(
+    return conn.execute(
         f" SELECT COALESCE(tool_name,'unknown'), COUNT(*)"
         f" FROM messages"
         f" WHERE timestamp > strftime('%s','now','-{_DAYS} days') AND role='tool'"
-        f" GROUP BY tool_name"
-        f" ORDER BY COUNT(*) DESC LIMIT 15",
+        f" GROUP BY tool_name",
     ).fetchall()
-    max_n = max((r[1] for r in rows), default=0)
+
+
+def _merge_tool_volume(parts):
+    merged = {}
+    for rows in parts:
+        for tool, n in rows:
+            merged[tool] = merged.get(tool, 0) + (n or 0)
+    top = sorted(merged.items(), key=lambda kv: -kv[1])[:15]
+    max_n = max((n for _, n in top), default=0)
     _COLORS = ("#5b8def", "#e2b93b", "#4fae62", "#d2654f", "#8f6fc9", "#4fa8a8", "#c96a9a", "#999")
     return [
         {
-            "tool": r[0],
-            "count": r[1],
-            "width_pct": (r[1] / max_n * 100) if max_n else 0,
+            "tool": tool,
+            "count": n,
+            "width_pct": (n / max_n * 100) if max_n else 0,
             "color": _COLORS[i % len(_COLORS)],
         }
-        for i, r in enumerate(rows)
+        for i, (tool, n) in enumerate(top)
     ]
 
 
-def _prompt_overhead(conn):
-    rows = conn.execute(
-        " SELECT hash, LENGTH(prompt) FROM system_prompts ORDER BY LENGTH(prompt) DESC LIMIT 6"
+def _prompt_rows(conn):
+    return conn.execute(
+        " SELECT hash, LENGTH(prompt) FROM system_prompts"
     ).fetchall()
-    max_chars = max((r[1] for r in rows), default=0)
+
+
+def _merge_prompt_overhead(parts):
+    by_hash = {}
+    for rows in parts:
+        for h, chars in rows:
+            by_hash[h] = max(by_hash.get(h, 0), chars or 0)
+    top = sorted(by_hash.items(), key=lambda kv: -kv[1])[:6]
+    max_chars = max((c for _, c in top), default=0)
     _LABELS = (
         "tool schemas JSON (largest snapshot)",
         "base prompt, rules, workspace",
@@ -257,19 +346,14 @@ def _prompt_overhead(conn):
     _COLORS = ("#5b8def", "#e2b93b", "#4fae62", "#d2654f", "#8f6fc9", "#4fa8a8")
     return [
         {
-            "label": _LABELS[i] if i < len(_LABELS) else f"prompt {r[0][:8]}",
-            "chars": r[1],
-            "tokens_approx": int(r[1] / 4),
-            "width_pct": (r[1] / max_chars * 100) if max_chars else 0,
+            "label": _LABELS[i] if i < len(_LABELS) else f"prompt {h[:8]}",
+            "chars": chars,
+            "tokens_approx": int(chars / 4),
+            "width_pct": (chars / max_chars * 100) if max_chars else 0,
             "color": _COLORS[i % len(_COLORS)],
         }
-        for i, r in enumerate(rows)
-    ]
-
-
-def _distinct_prompt_count(conn):
-    row = conn.execute("SELECT COUNT(DISTINCT hash) FROM system_prompts").fetchone()
-    return row[0] if row else 0
+        for i, (h, chars) in enumerate(top)
+    ], len(by_hash)
 
 
 def _bar_row(label, width_pct, color, value, sub=""):
@@ -296,20 +380,40 @@ def _drow(day, total, segments):
 
 
 def _collect_data():
-    def query(conn):
+    def query(conn, label):
         return {
             "headline": _headline_totals(conn),
             "by_model": _by_model(conn),
             "daily": _daily_stacked(conn),
-            "buckets": _size_buckets(conn),
+            "sizes": _session_sizes(conn),
             "surface": _by_surface(conn),
-            "top_sessions": _top_sessions(conn),
+            "top_sessions": _top_sessions(conn, label),
             "tools": _tool_volume(conn),
-            "prompts": _prompt_overhead(conn),
-            "prompt_count": _distinct_prompt_count(conn),
+            "prompts": _prompt_rows(conn),
         }
 
-    return _with_db(query)
+    sources, parts = _with_dbs(query)
+    if not parts:
+        return {}
+
+    top_sessions = sorted(
+        (r for p in parts for r in p["top_sessions"]),
+        key=lambda r: -(r["fresh"] or 0),
+    )[:15]
+
+    prompts, prompt_count = _merge_prompt_overhead([p["prompts"] for p in parts])
+    return {
+        "sources": sources,
+        "headline": _merge_headline([p["headline"] for p in parts]),
+        "by_model": _merge_by_model([p["by_model"] for p in parts]),
+        "daily": _merge_daily([p["daily"] for p in parts]),
+        "buckets": _merge_size_buckets([p["sizes"] for p in parts]),
+        "surface": _merge_surface([p["surface"] for p in parts], sources),
+        "top_sessions": top_sessions,
+        "tools": _merge_tool_volume([p["tools"] for p in parts]),
+        "prompts": prompts,
+        "prompt_count": prompt_count,
+    }
 
 
 def render_tokens_page(bind_host="127.0.0.1"):
@@ -332,6 +436,12 @@ def render_tokens_page(bind_host="127.0.0.1"):
     if headline.get("cost"):
         cost_label = "measured cost (Anthropic only)" if headline.get("cost_is_actual") else "estimated cost"
         h_cards += f'<div class="card"><b>{_fmt_cost(headline.get("cost"))}</b><span>{cost_label}</span></div>'
+
+    sources_note = (
+        f'<div class="note">Reading {len(data["sources"])} state db(s): '
+        f'{escape(", ".join(data["sources"]))}. Kanban worker usage lives in '
+        "profile dbs and is folded into every section below.</div>"
+    )
 
     cost_note = (
         '<div class="note">Cost data exists only for metered providers. '
@@ -383,13 +493,14 @@ def render_tokens_page(bind_host="127.0.0.1"):
 
     top_rows = "".join(
         f"<tr><td>{escape(r['title'])}</td><td>{escape(r['source'])}</td>"
+        f"<td>{escape(r['db'])}</td>"
         f"<td>{escape(r['started'])}</td><td>{r['msgs']}</td><td>{r['calls']}</td>"
         f"<td>{_fmt_tok(r['fresh'])}</td><td>{_fmt_tok(r['out'])}</td>"
         f"<td>{_fmt_tok(r['cache_read'])}</td><td>{_fmt_cost(r['cost'])}</td></tr>"
         for r in data["top_sessions"]
     )
     top_table = (
-        f'<table><tr><th>title</th><th>source</th><th>started</th><th>msgs</th>'
+        f'<table><tr><th>title</th><th>source</th><th>db</th><th>started</th><th>msgs</th>'
         f'<th>calls</th><th>fresh in</th><th>out</th><th>cache-read</th><th>cost</th></tr>{top_rows}</table>'
     ) if top_rows else "<p class=muted>No sessions with fresh input in this window.</p>"
 
@@ -412,12 +523,12 @@ def render_tokens_page(bind_host="127.0.0.1"):
         f'<div class="note">Every turn carries roughly '
         f"{_fmt_tok(data['prompts'][0]['tokens_approx'] if data['prompts'] else 0)} "
         f"tokens of fixed prompt when the largest snapshot is active. "
-        f"{data['prompt_count']} distinct prompt hash(es) in state.db — each distinct hash "
+        f"{data['prompt_count']} distinct prompt hash(es) across all state dbs — each distinct hash "
         f"is a cache-bust that re-writes the prompt cache.</div>"
     )
 
     sections = (
-        f'<div class="cards">{h_cards}</div>{cost_note}'
+        f'<div class="cards">{h_cards}</div>{sources_note}{cost_note}'
         f'<h2>Fresh input by model</h2><div class="bars">{by_model_bars}</div>'
         f'<h2>Fresh input per day, stacked by model</h2>'
         f'<div style="margin:6px 0">{legend_html}</div>'
