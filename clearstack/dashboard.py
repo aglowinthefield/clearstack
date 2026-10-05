@@ -11,6 +11,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 
 from clearstack.token_view import render_tokens_page
+from clearstack.theme import theme_head, theme_picker
 
 
 def default_log_path():
@@ -434,25 +435,19 @@ def render_page(runs, selected_id=None, error=None, bind_host="127.0.0.1"):
 <title>ClearStack runs</title>
 <style>
 :root{{
-  --sky-top:#0d6fd6;--sky-mid:#3b9bef;--sky-low:#8fcdfb;--sky-horizon:#d8f0fd;
-  --surface:rgba(255,255,255,.55);--surface-strong:rgba(255,255,255,.82);--border:rgba(255,255,255,.75);
-  --ink:#0b3156;--muted:#3f6e8f;--line:rgba(11,49,86,.12);
-  --aqua:#139ad6;--aqua-deep:#0a6fb5;--mint:#1fae6e;--coral:#e0556e;--amber:#d99412;
-  --shadow:0 2px 3px rgba(9,56,97,.08),0 18px 34px -16px rgba(9,56,97,.5);
+  --sky-top:#232937;--sky-mid:#30394a;--sky-low:#465266;--sky-horizon:#667487;
+  --surface:rgba(22,27,36,.78);--surface-strong:rgba(31,38,50,.94);--border:rgba(181,195,218,.20);
+  --ink:#edf2fa;--muted:#aebbd0;--line:rgba(181,195,218,.16);
+  --aqua:#79a9ff;--aqua-deep:#b7d0ff;--mint:#69c69a;--coral:#ef8795;--amber:#efba65;
+  --shadow:0 2px 3px rgba(0,0,0,.20),0 18px 34px -16px rgba(0,0,0,.72);
 }}
 *{{box-sizing:border-box}}
 body{{margin:0;min-height:100vh;color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;
-  background:
-    radial-gradient(420px 420px at 88% 6%,rgba(255,255,255,.95),rgba(255,255,255,.25) 40%,rgba(255,255,255,0) 62%),
-    linear-gradient(180deg,var(--sky-top) 0%,var(--sky-mid) 38%,var(--sky-low) 72%,var(--sky-horizon) 100%);
+  background:linear-gradient(160deg,var(--sky-top) 0%,var(--sky-mid) 42%,var(--sky-low) 100%);
   background-attachment:fixed}}
 main{{max-width:1280px;margin:0 auto;padding:44px 28px 72px}}
-.glass{{background:
-    radial-gradient(120% 70% at 30% -20%,rgba(255,255,255,.95),rgba(255,255,255,0) 60%),
-    var(--surface);
-  backdrop-filter:blur(16px) saturate(170%);-webkit-backdrop-filter:blur(16px) saturate(170%);
-  border:1px solid var(--border);border-radius:20px;
-  box-shadow:var(--shadow),inset 0 1px 0 rgba(255,255,255,.9);position:relative;overflow:hidden}}
+.glass{{background:var(--surface);backdrop-filter:blur(16px) saturate(130%);-webkit-backdrop-filter:blur(16px) saturate(130%);
+  border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);position:relative;overflow:hidden}}
 header.glass{{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:20px 26px;margin-bottom:24px}}
 h1{{font-size:clamp(26px,4vw,38px);line-height:1;margin:0;letter-spacing:-.03em;font-weight:800;
   color:var(--aqua-deep);text-shadow:0 1px 0 rgba(255,255,255,.8)}}
@@ -554,9 +549,9 @@ ul{{padding-left:20px;margin:5px 0}}li{{margin:4px 0;overflow-wrap:anywhere}}
 @media(max-width:700px){{main{{padding:25px 16px 48px}}header.glass{{align-items:flex-start;flex-direction:column}}
   .table-wrap{{overflow-x:auto}}table{{min-width:660px}}.summary.glass{{gap:18px}}}}
 @media(max-width:860px){{.columns{{grid-template-columns:1fr}}}}
-</style></head><body><main>
+</style>{theme_head()}</head><body><main>
 <header class=glass><div><p class=brand>ClearStack / local run log</p><h1>Runs</h1></div>
-<div class=head-right><a class=back href="/tokens">Token spend</a><span class=live id=live><span class=live-dot></span><span id=live-label>live</span></span>
+<div class=head-right>{theme_picker()}<a class=back href="/tokens">Token spend</a><span class=live id=live><span class=live-dot></span><span id=live-label>live</span></span>
 <span class=local>{escape(bind_host)}</span></div></header>
 <div class="summary glass"><div class=metric><strong>{len(runs)}</strong><span>runs</span></div>
 <div class=metric><strong>{counts['open']}</strong><span>open</span></div><div class=metric><strong>{counts['done']}</strong><span>done</span></div>

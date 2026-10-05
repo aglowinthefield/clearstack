@@ -11,6 +11,8 @@ from html import escape
 from pathlib import Path
 import sqlite3
 
+from clearstack.theme import theme_head, theme_picker
+
 
 def _state_db_path():
     return Path.home() / ".hermes" / "state.db"
@@ -101,6 +103,91 @@ def _merge_headline(parts):
     out["cost"] = out["actual_cost"] if out["actual_cost"] else out["estimated_cost"]
     out["cost_is_actual"] = bool(out["actual_cost"])
     return out
+
+
+def _table_columns(conn, table):
+    """Return column names so dashboard reads tolerate older Hermes databases."""
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _billing_rows(conn):
+    """Read Hermes's recorded pricing provenance, without calling providers."""
+    required = {"billing_provider", "billing_mode", "cost_status", "cost_source"}
+    if not required <= _table_columns(conn, "session_model_usage"):
+        return []
+    return conn.execute(
+        f"SELECT billing_provider, billing_mode, cost_status, cost_source,"
+        f" SUM(api_call_count), SUM(input_tokens), SUM(output_tokens),"
+        f" COALESCE(SUM(actual_cost_usd),0), COALESCE(SUM(estimated_cost_usd),0)"
+        f" FROM session_model_usage"
+        f" WHERE last_seen > strftime('%s','now','-{_DAYS} days')"
+        f" GROUP BY billing_provider, billing_mode, cost_status, cost_source"
+    ).fetchall()
+
+
+def _merge_billing(parts):
+    """Merge pricing rows while retaining the provenance that qualifies a cost."""
+    merged = {}
+    for rows in parts:
+        for provider, mode, status, source, calls, fresh, output, actual, estimated in rows:
+            key = (provider or "unknown provider", mode or "unclassified", status or "unknown", source or "none")
+            value = merged.setdefault(key, [0, 0, 0, 0.0, 0.0])
+            value[0] += calls or 0
+            value[1] += fresh or 0
+            value[2] += output or 0
+            value[3] += actual or 0
+            value[4] += estimated or 0
+    groups = []
+    for (provider, mode, status, source), (calls, fresh, output, actual, estimated) in sorted(merged.items()):
+        included = mode == "subscription_included" or status == "included"
+        amount = actual if status == "actual" else estimated
+        groups.append({
+            "provider": provider,
+            "mode": mode,
+            "status": status,
+            "source": source,
+            "calls": calls,
+            "fresh": fresh,
+            "output": output,
+            "amount": amount if amount else None,
+            "included": included,
+        })
+    return groups
+
+
+def _billing_section(groups):
+    if not groups:
+        return (
+            '<section class="billing"><h2>Billing and quota signals</h2>'
+            '<p class=muted>Hermes has no recorded billing metadata in the last 14 days.</p></section>'
+        )
+    cards = []
+    metered_spend = 0.0
+    for group in groups:
+        if group["included"]:
+            price = "Included with subscription"
+        elif group["amount"] is not None:
+            price = f"{_fmt_cost(group['amount'])} {escape(group['status'])}"
+            metered_spend += group["amount"]
+        else:
+            price = "Price unavailable"
+        cards.append(
+            '<article class=billing-card>'
+            f'<h3>{escape(group["provider"])}</h3><p class=billing-price>{price}</p>'
+            f'<p class=billing-meta>{escape(group["mode"])} · {escape(group["source"])}</p>'
+            f'<p class=billing-meta>{_fmt_tok(group["fresh"])} fresh in · '
+            f'{_fmt_tok(group["output"])} out · {group["calls"]} calls</p></article>'
+        )
+    return f"""<section class=billing>
+      <div class=section-heading><h2>Billing and quota signals</h2><span>last {_DAYS} days</span></div>
+      <div class=billing-grid>{''.join(cards)}</div>
+      <div class=guardrail data-billing-spend="{metered_spend:.4f}">
+        <label for=clearstack-spend-cap>Set a 14-day spend guardrail</label>
+        <div><span>$</span><input id=clearstack-spend-cap type=number min=0 step=0.01 inputmode=decimal placeholder="No cap"></div>
+        <p data-spend-guardrail>Set a cap to compare against recorded metered cost.</p>
+      </div>
+      <p class=quota-note>Provider quota remaining and reset times are not stored by Hermes. This view reads local pricing metadata only and makes no provider request.</p>
+    </section>"""
 
 
 def _by_model(conn):
@@ -390,6 +477,7 @@ def _collect_data():
             "top_sessions": _top_sessions(conn, label),
             "tools": _tool_volume(conn),
             "prompts": _prompt_rows(conn),
+            "billing": _billing_rows(conn),
         }
 
     sources, parts = _with_dbs(query)
@@ -413,6 +501,7 @@ def _collect_data():
         "tools": _merge_tool_volume([p["tools"] for p in parts]),
         "prompts": prompts,
         "prompt_count": prompt_count,
+        "billing": _merge_billing([p["billing"] for p in parts]),
     }
 
 
@@ -448,6 +537,7 @@ def render_tokens_page(bind_host="127.0.0.1"):
         "Subscription-quota providers show volume as rate-limit pressure, not dollars. "
         "Output is typically under 15% of fresh tokens: the spend is context, not generation.</div>"
     )
+    billing = _billing_section(data["billing"])
 
     by_model_bars = "".join(
         _bar_row(
@@ -528,7 +618,7 @@ def render_tokens_page(bind_host="127.0.0.1"):
     )
 
     sections = (
-        f'<div class="cards">{h_cards}</div>{sources_note}{cost_note}'
+        f'<div class="cards">{h_cards}</div>{sources_note}{billing}{cost_note}'
         f'<h2>Fresh input by model</h2><div class="bars">{by_model_bars}</div>'
         f'<h2>Fresh input per day, stacked by model</h2>'
         f'<div style="margin:6px 0">{legend_html}</div>'
@@ -558,25 +648,19 @@ def _tokens_html(body, bind_host):
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>Token spend · ClearStack</title><style>
 :root{{
-  --sky-top:#0d6fd6;--sky-mid:#3b9bef;--sky-low:#8fcdfb;--sky-horizon:#d8f0fd;
-  --surface:rgba(255,255,255,.55);--surface-strong:rgba(255,255,255,.82);--border:rgba(255,255,255,.75);
-  --ink:#0b3156;--muted:#3f6e8f;--line:rgba(11,49,86,.12);
-  --aqua:#139ad6;--aqua-deep:#0a6fb5;--mint:#1fae6e;--coral:#e0556e;--amber:#d99412;
-  --shadow:0 2px 3px rgba(9,56,97,.08),0 18px 34px -16px rgba(9,56,97,.5);
+  --sky-top:#232937;--sky-mid:#30394a;--sky-low:#465266;--sky-horizon:#667487;
+  --surface:rgba(22,27,36,.78);--surface-strong:rgba(31,38,50,.94);--border:rgba(181,195,218,.20);
+  --ink:#edf2fa;--muted:#aebbd0;--line:rgba(181,195,218,.16);
+  --aqua:#79a9ff;--aqua-deep:#b7d0ff;--mint:#69c69a;--coral:#ef8795;--amber:#efba65;
+  --shadow:0 2px 3px rgba(0,0,0,.20),0 18px 34px -16px rgba(0,0,0,.72);
 }}
 *{{box-sizing:border-box}}
 body{{margin:0;min-height:100vh;color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;
-  background:
-    radial-gradient(420px 420px at 88% 6%,rgba(255,255,255,.95),rgba(255,255,255,.25) 40%,rgba(255,255,255,0) 62%),
-    linear-gradient(180deg,var(--sky-top) 0%,var(--sky-mid) 38%,var(--sky-low) 72%,var(--sky-horizon) 100%);
+  background:linear-gradient(160deg,var(--sky-top) 0%,var(--sky-mid) 42%,var(--sky-low) 100%);
   background-attachment:fixed}}
 main{{max-width:1280px;margin:0 auto;padding:44px 28px 72px}}
-.glass{{background:
-    radial-gradient(120% 70% at 30% -20%,rgba(255,255,255,.95),rgba(255,255,255,0) 60%),
-    var(--surface);
-  backdrop-filter:blur(16px) saturate(170%);-webkit-backdrop-filter:blur(16px) saturate(170%);
-  border:1px solid var(--border);border-radius:20px;
-  box-shadow:var(--shadow),inset 0 1px 0 rgba(255,255,255,.9);position:relative;overflow:hidden}}
+.glass{{background:var(--surface);backdrop-filter:blur(16px) saturate(130%);-webkit-backdrop-filter:blur(16px) saturate(130%);
+  border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);position:relative;overflow:hidden}}
 header.glass{{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:20px 26px;margin-bottom:24px}}
 h1{{font-size:clamp(26px,4vw,38px);line-height:1;margin:0;letter-spacing:-.03em;font-weight:800;
   color:var(--aqua-deep);text-shadow:0 1px 0 rgba(255,255,255,.8)}}
@@ -600,14 +684,23 @@ h2{{font-size:15px;margin:28px 0 10px;color:var(--muted);text-transform:uppercas
 .lg{{margin-right:14px;font-size:12px;color:var(--ink)}}
 .lg i{{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px}}
 .note{{background:var(--surface-strong);border-left:3px solid var(--amber);padding:10px 14px;margin:10px 0;font-size:13px;color:var(--ink)}}
+.billing{{margin:26px 0 20px;padding-top:1px;border-top:1px solid var(--line)}}
+.section-heading{{display:flex;align-items:baseline;justify-content:space-between;gap:12px}}
+.section-heading h2{{margin-bottom:10px}}.section-heading span{{font-size:12px;color:var(--muted)}}
+.billing-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}}
+.billing-card{{border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--surface)}}
+.billing-card h3{{margin:0;color:var(--ink);font-size:14px}}.billing-price{{margin:8px 0 4px;color:var(--aqua-deep);font-size:16px;font-weight:700}}.billing-meta{{margin:3px 0;color:var(--muted);font-size:12px}}
+.guardrail{{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding:10px 12px;background:var(--surface);border-left:3px solid var(--aqua)}}
+.guardrail label{{font-size:13px;font-weight:650}}.guardrail div{{display:flex;align-items:center;gap:4px;color:var(--muted)}}.guardrail input{{width:100px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface-strong);color:var(--ink)}}.guardrail p{{margin:0;color:var(--muted);font-size:12px}}
+.quota-note{{margin:10px 0 0;color:var(--muted);font-size:12px}}
 table{{border-collapse:collapse;width:100%;font-size:12.5px}}
 th{{text-align:left;color:var(--muted);font-weight:600;padding:4px 8px;border-bottom:1px solid var(--line)}}
 td{{padding:4px 8px;border-bottom:1px solid var(--line)}}
 .muted{{color:var(--muted)}}
 .back{{font-size:13px;color:var(--aqua-deep);text-decoration:none;font-weight:600}}
 .back:hover{{text-decoration:underline}}
-</style></head><body><main>
+</style>{theme_head()}</head><body><main>
 <header class=glass><div><p class=brand>ClearStack / token spend</p><h1>Token spend</h1></div>
-<div class=head-right><a class=back href="/">← Runs</a><span class=local>{escape(bind_host)}</span></div></header>
+<div class=head-right>{theme_picker()}<a class=back href="/">← Runs</a><span class=local>{escape(bind_host)}</span></div></header>
 <section class="panel glass">{body}</section>
 </main></body></html>"""

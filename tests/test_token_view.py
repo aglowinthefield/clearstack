@@ -13,7 +13,7 @@ from clearstack.dashboard import DashboardHandler
 from clearstack.token_view import render_tokens_page
 
 
-def _write_state_db(db_path, sessions, usage, messages=(), prompts=()):
+def _write_state_db(db_path, sessions, usage, messages=(), prompts=(), billing=()):
     conn = sqlite3.connect(db_path)
     conn.execute(
         "CREATE TABLE sessions ("
@@ -47,6 +47,10 @@ def _write_state_db(db_path, sessions, usage, messages=(), prompts=()):
         " last_seen REAL"
         ")"
     )
+    conn.execute("ALTER TABLE session_model_usage ADD COLUMN billing_provider TEXT")
+    conn.execute("ALTER TABLE session_model_usage ADD COLUMN billing_mode TEXT")
+    conn.execute("ALTER TABLE session_model_usage ADD COLUMN cost_status TEXT")
+    conn.execute("ALTER TABLE session_model_usage ADD COLUMN cost_source TEXT")
     conn.execute(
         "CREATE TABLE messages ("
         " id INTEGER PRIMARY KEY,"
@@ -63,7 +67,18 @@ def _write_state_db(db_path, sessions, usage, messages=(), prompts=()):
         ")"
     )
     conn.executemany("INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", sessions)
-    conn.executemany("INSERT INTO session_model_usage VALUES (?,?,?,?,?,?,?,?,?,?)", usage)
+    conn.executemany(
+        "INSERT INTO session_model_usage "
+        "(session_id, model, api_call_count, input_tokens, output_tokens, cache_read_tokens, "
+        "cache_write_tokens, actual_cost_usd, estimated_cost_usd, last_seen) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        usage,
+    )
+    conn.executemany(
+        "UPDATE session_model_usage SET billing_provider=?, billing_mode=?, cost_status=?, cost_source=? "
+        "WHERE session_id=? AND model=?",
+        billing,
+    )
     conn.executemany("INSERT INTO messages VALUES (?,?,?,?,?)", messages)
     conn.executemany("INSERT INTO system_prompts VALUES (?,?)", prompts)
     conn.commit()
@@ -152,6 +167,40 @@ class TokenViewTest(unittest.TestCase):
         self.assertIn("Fixed per-turn overhead anatomy", page)
         self.assertIn("50.0K chars", page)
         self.assertIn("20.0K chars", page)
+
+    def test_page_shows_billing_groups_and_marks_missing_provider_quotas_unknown(self):
+        db = _write_state_db(
+            self.state_dir / "billing.db",
+            sessions=[
+                ("metered", "desktop", "Metered task", None, "gpt-5", 1_800_000_000, 1, 1, 100, 10, 0, 0, None, 0.42),
+                ("included", "desktop", "Included task", None, "claude", 1_800_000_000, 1, 1, 200, 20, 0, 0, None, 1.50),
+            ],
+            usage=[
+                ("metered", "gpt-5", 1, 100, 10, 0, 0, 0.42, None, 1_800_000_000),
+                ("included", "claude", 1, 200, 20, 0, 0, 1.50, None, 1_800_000_000),
+            ],
+            billing=[
+                ("openai", "api", "actual", "provider", "metered", "gpt-5"),
+                ("anthropic", "subscription_included", "included", "none", "included", "claude"),
+            ],
+        )
+
+        page = self._render(db)
+
+        self.assertIn("Billing and quota signals", page)
+        self.assertIn("openai", page)
+        self.assertIn("$0.42 actual", page)
+        self.assertIn("Included with subscription", page)
+        self.assertIn("not stored by Hermes", page)
+        self.assertIn("Set a 14-day spend guardrail", page)
+
+    def test_token_page_has_a_persistent_theme_picker_and_custom_palette_inputs(self):
+        page = self._render(self._make_state_db())
+
+        self.assertIn("Appearance", page)
+        self.assertIn("ClearStack theme", page)
+        self.assertIn("data-theme-token=\"aqua\"", page)
+        self.assertIn("clearstack.theme", page)
 
     def test_missing_state_db_renders_empty_state(self):
         with patch("clearstack.token_view._state_db_path", return_value=Path("/no/such/state.db")), \

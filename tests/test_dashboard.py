@@ -115,6 +115,14 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("Token and tool telemetry is not collected yet", page)
         self.assertIn("<title>ClearStack runs</title>", page)
 
+    def test_run_page_has_a_persistent_theme_picker_and_custom_palette_inputs(self):
+        page = render_page(load_runs(self.log))
+
+        self.assertIn("Appearance", page)
+        self.assertIn("ClearStack theme", page)
+        self.assertIn("data-theme-token=\"aqua\"", page)
+        self.assertIn("clearstack.theme", page)
+
     def test_run_with_telemetry_shows_cost_in_table_summary_and_detail(self):
         self.write_events(
             {"ts": "2026-10-01T10:00:00+00:00", "event": "start", "run": "r1", "task": "priced run", "agent": "hermes"},
