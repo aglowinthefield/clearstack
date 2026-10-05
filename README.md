@@ -80,11 +80,11 @@ skills/clear-ci/scripts/watch --repo OWNER/REPO --pr 123
 
 See [`skills/clear-ci/SKILL.md`](skills/clear-ci/SKILL.md) for the fix-or-ask decision on each failure.
 
-## Agent multiplexing
+## Test audit
 
-`agent-multiplexing` turns clear-mode's parallel-work principle into a coordination procedure. It requires one coordinator, explicit worktree or writer ownership, complete worker briefs, parent-child run links, and coordinator verification of the integrated artifact. It applies only when tasks are independent enough to run in parallel.
+`test-audit` gates new and changed tests on the behavior they protect, the regression they catch, the coverage they do not duplicate, and the production seams they do not require. It also provides an evidence-first audit process for removing low-value tests and their test-only production paths.
 
-See [`skills/agent-multiplexing/SKILL.md`](skills/agent-multiplexing/SKILL.md) for the worker brief and completion checks.
+See [`skills/test-audit/SKILL.md`](skills/test-audit/SKILL.md) for the authoring gate, junk-pattern checklist, retention bar, and audit workflow.
 
 ## Principles
 
