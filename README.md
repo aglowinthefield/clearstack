@@ -80,6 +80,12 @@ skills/clear-ci/scripts/watch --repo OWNER/REPO --pr 123
 
 See [`skills/clear-ci/SKILL.md`](skills/clear-ci/SKILL.md) for the fix-or-ask decision on each failure.
 
+## Agent multiplexing
+
+`agent-multiplexing` turns clear-mode's parallel-work principle into a coordination procedure. It requires one coordinator, explicit worktree or writer ownership, complete worker briefs, parent-child run links, and coordinator verification of the integrated artifact. It applies only when tasks are independent enough to run in parallel.
+
+See [`skills/agent-multiplexing/SKILL.md`](skills/agent-multiplexing/SKILL.md) for the worker brief and completion checks.
+
 ## Principles
 
 Each principle is one short file in [`skills/clear-mode/references/principles/`](skills/clear-mode/references/principles/) giving the rule, when it applies, the decision it changes, and a counter-example.
@@ -91,7 +97,7 @@ Each principle is one short file in [`skills/clear-mode/references/principles/`]
 | Comprehension | [model-the-domain](skills/clear-mode/references/principles/model-the-domain.md), [test-behavior](skills/clear-mode/references/principles/test-behavior.md), [minimize-reader-load](skills/clear-mode/references/principles/minimize-reader-load.md) |
 | Maintenance | [less-code](skills/clear-mode/references/principles/less-code.md), [guards-over-reminders](skills/clear-mode/references/principles/guards-over-reminders.md), [budget-the-context](skills/clear-mode/references/principles/budget-the-context.md) |
 | Repairability | [fix-at-the-right-layer](skills/clear-mode/references/principles/fix-at-the-right-layer.md), [fail-loudly-and-locally](skills/clear-mode/references/principles/fail-loudly-and-locally.md), [prefer-reversible-changes](skills/clear-mode/references/principles/prefer-reversible-changes.md) |
-| Mutability | [experiment-before-asking](skills/clear-mode/references/principles/experiment-before-asking.md) |
+| Mutability | [experiment-before-asking](skills/clear-mode/references/principles/experiment-before-asking.md), [parallelize-independent-work](skills/clear-mode/references/principles/parallelize-independent-work.md) |
 
 ## Playbooks
 
