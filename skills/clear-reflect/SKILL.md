@@ -31,6 +31,10 @@ scripts/mine --format json --output report.json
 
 By default it reads `~/.hermes/state.db` and `~/.local/state/clearstack/runs.jsonl`. Pass `--db` or `--runs` to override.
 
+For the Context churn section only, run `scripts/churn-report`. It calls `mine --format summary` with the existing source selection, including profile state databases. Miner stderr remains visible, and a miner failure keeps its nonzero exit status without printing a partial report. A summary without a Context churn section also fails.
+
+When testing these commands, use a stub miner or set `HOME` to a temporary directory. Passing `--db` alone does not isolate the miner's profile scans.
+
 ## Detectors
 
 ### Oversized tool results
