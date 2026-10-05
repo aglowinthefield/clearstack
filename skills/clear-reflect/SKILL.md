@@ -23,7 +23,7 @@ From this skill's directory:
 scripts/mine
 ```
 
-Prints a JSON report and a short human summary. Run with `--format json` for machine-readable output only, or `--format summary` for the human text only.
+Prints a JSON report and a short human summary. Run with `--format json` for machine-readable output only, `--format summary` for the detailed terminal text, or `--format discord` for one compact Discord message.
 
 ```bash
 scripts/mine --format json --output report.json

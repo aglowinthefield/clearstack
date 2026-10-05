@@ -162,7 +162,7 @@ hermes cron pause clear-reflect
 hermes cron resume clear-reflect
 ```
 
-Run with `--format json` for machine-readable output, or `--format summary` for the human text only.
+Run with `--format json` for machine-readable output, `--format summary` for the detailed terminal text, or `--format discord` for one compact Discord message.
 
 ## Status
 

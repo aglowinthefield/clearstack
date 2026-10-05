@@ -10,7 +10,7 @@ MINE = Path(__file__).with_name("mine").resolve()
 
 def main():
     result = subprocess.run(
-        [sys.executable, str(MINE), "--format", "summary"],
+        [sys.executable, str(MINE), "--format", "discord"],
         capture_output=True,
         text=True,
     )

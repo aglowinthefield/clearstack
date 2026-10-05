@@ -235,6 +235,60 @@ class MineIntegrationTest(unittest.TestCase):
         self.assertIn("1 finding(s)", report["summary"])
 
 
+class DiscordSummaryTest(unittest.TestCase):
+    def test_compacts_findings_into_discord_markdown(self):
+        oversized = [
+            {
+                "tool_name": "skill_view",
+                "command_shape": "skill_view: <args>",
+                "count": count,
+                "max_size": 41_722,
+                "total_size": 1_263_822,
+            }
+            for count in range(1, 7)
+        ]
+        repeats = [
+            {
+                "normalized_command": "patch(('mode', 'patch'))",
+                "count": count,
+                "session_id": "20260921_141506_bd0bfe",
+                "compaction_adjacent": False,
+            }
+            for count in range(3, 9)
+        ]
+        unused = {
+            "note": None,
+            "never_used_count": 44,
+            "total_skills": 80,
+            "never_used_cost": 4_772,
+            "total_catalog_cost": 7_736,
+            "skills": [
+                {"name": "agents-sdk", "catalog_cost": 441},
+                {"name": "cloudflare", "catalog_cost": 378},
+            ],
+        }
+
+        summary = mine_module.emit_discord_summary(
+            oversized,
+            repeats,
+            unused,
+            {"note": "domain map unavailable"},
+            {"note": "no lane candidates"},
+            {"note": "run data unavailable"},
+        )
+
+        self.assertIn("**Oversized results** (6 patterns over 20,000 chars)", summary)
+        self.assertIn("- `skill_view` x6, 1.26M total, 41.7K max", summary)
+        self.assertIn("- 1 more", summary)
+        self.assertIn("**Repeated commands** (6 patterns)", summary)
+        self.assertIn("- `patch(('mode', 'patch'))` x8", summary)
+        self.assertIn("**Unused skills** (44 of 80, 4,772 / 7,736 catalog chars)", summary)
+        self.assertIn("**Domain fit**: domain map unavailable", summary)
+        self.assertIn("**Lane ideation**: no lane candidates", summary)
+        self.assertIn("**Context churn**: run data unavailable", summary)
+        self.assertLessEqual(len(summary), mine_module.DISCORD_MESSAGE_LIMIT)
+
+
 class UnusedSkillsTest(unittest.TestCase):
     def _make_skills_dir(self, td, skills):
         """Create a temporary skills directory.

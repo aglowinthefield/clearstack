@@ -97,6 +97,9 @@ DEFAULT_SCRIPTS_DIR = Path.home() / ".hermes" / "scripts"
 DEFAULT_KANBAN_BOARDS_DIR = Path.home() / ".hermes" / "kanban" / "boards"
 SIZE_THRESHOLD = 20000
 REPEAT_MIN_COUNT = 3
+DISCORD_MESSAGE_LIMIT = 1900
+DISCORD_ITEMS_PER_SECTION = 5
+DISCORD_LABEL_LIMIT = 80
 # Context-churn detector thresholds.
 CHURN_MIN_RUNS = 3  # card is churned at this many worker runs
 AMPLIFY_MIN_RATIO = 200  # input-side tokens per output token
@@ -1132,6 +1135,159 @@ def mine_domain_fit(
 # Reporting
 # ---------------------------------------------------------------------------
 
+def _compact_number(value):
+    """Format an integer compactly enough for a chat summary."""
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.2f}".rstrip("0").rstrip(".") + "M"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}".rstrip("0").rstrip(".") + "K"
+    return str(value)
+
+
+def _discord_code(value):
+    """Render a bounded single-line Discord inline code span."""
+    text = " ".join(str(value).split()).replace("`", "'")
+    if len(text) > DISCORD_LABEL_LIMIT:
+        text = text[:DISCORD_LABEL_LIMIT - 1] + "…"
+    return f"`{text}`"
+
+
+def _discord_section(lines, heading, entries, total):
+    """Append one compact, bounded finding section."""
+    lines.append(heading)
+    lines.extend(entries[:DISCORD_ITEMS_PER_SECTION])
+    remaining = total - min(len(entries), DISCORD_ITEMS_PER_SECTION)
+    if remaining:
+        lines.append(f"- {remaining:,} more")
+
+
+def _discord_oversized_label(finding):
+    """Keep command-shape context without repeating the tool name."""
+    tool_name = finding["tool_name"]
+    shape = finding["command_shape"]
+    prefix = f"{tool_name}: "
+    detail = shape[len(prefix):] if shape.startswith(prefix) else shape
+    detail = detail.removesuffix(" <args>")
+    return tool_name if detail in ("", "<args>") else f"{tool_name} {detail}"
+
+
+def _discord_domain_fit(domain_fit):
+    note = domain_fit.get("note")
+    if note:
+        return f"**Domain fit**: {note}"
+
+    profiles = domain_fit.get("profiles", [])
+    cross_skills = sum(len(p["cross_domain_skill_use"]) for p in profiles)
+    cross_signals = sum(
+        len(signals)
+        for p in profiles
+        for signals in p["cross_domain_signals"].values()
+    )
+    mismatches = len(domain_fit.get("routing_mismatches", []))
+    return (
+        f"**Domain fit**: {len(profiles)} profiles, {cross_skills} cross-domain skill uses, "
+        f"{cross_signals} signal hits, {mismatches} routing mismatches"
+    )
+
+
+def _discord_lane_ideation(lane_ideation_data):
+    note = lane_ideation_data.get("note")
+    if note:
+        return [f"**Lane ideation**: {note}"]
+
+    candidates = lane_ideation_data.get("candidates", [])
+    lines = [f"**Lane ideation**: {len(candidates)} candidates"]
+    for candidate in candidates[:DISCORD_ITEMS_PER_SECTION]:
+        lines.append(
+            f"- {_discord_code(candidate['name'])}: {candidate['session_count']} sessions, "
+            f"{_compact_number(candidate['tokens'])} tokens"
+        )
+    remaining = len(candidates) - min(len(candidates), DISCORD_ITEMS_PER_SECTION)
+    if remaining:
+        lines.append(f"- {remaining:,} more")
+    return lines
+
+
+def _discord_context_churn(context_churn):
+    note = context_churn.get("note")
+    if note:
+        return f"**Context churn**: {note}"
+
+    restart = context_churn["multi_run"]
+    amplification = context_churn["amplification"]
+    refetch = context_churn["kanban_show_refetch"]
+    return (
+        f"**Context churn**: {restart['cards']} restarted cards, "
+        f"{amplification['sessions_above']} sessions above {amplification['min_ratio']}x resend, "
+        f"{refetch['calls']:,} kanban refetches"
+    )
+
+
+def emit_discord_summary(oversized, repeats, unused, domain_fit,
+                         lane_ideation_data, context_churn=None):
+    """Return a compact Markdown report that fits in one Discord message."""
+    lines = []
+    oversized_entries = [
+        (
+            f"- {_discord_code(_discord_oversized_label(f))} x{f['count']}, "
+            f"{_compact_number(f['total_size'])} total, "
+            f"{_compact_number(f['max_size'])} max"
+        )
+        for f in sorted(oversized, key=lambda f: (f["total_size"], f["count"]), reverse=True)
+    ]
+    _discord_section(
+        lines,
+        f"**Oversized results** ({len(oversized)} patterns over {SIZE_THRESHOLD:,} chars)",
+        oversized_entries,
+        len(oversized),
+    )
+
+    lines.append("")
+    repeat_entries = [
+        (
+            f"- {_discord_code(f['normalized_command'])} x{f['count']} in "
+            f"{_discord_code(f['session_id'])}"
+            f"{' (after compaction)' if f['compaction_adjacent'] else ''}"
+        )
+        for f in sorted(repeats, key=lambda f: f["count"], reverse=True)
+    ]
+    _discord_section(
+        lines,
+        f"**Repeated commands** ({len(repeats)} patterns)",
+        repeat_entries,
+        len(repeats),
+    )
+
+    lines.append("")
+    note = unused.get("note")
+    if note:
+        lines.append(f"**Unused skills**: {note}")
+    else:
+        unused_entries = [
+            f"- {_discord_code(skill['name'])}, {skill['catalog_cost']:,} chars"
+            for skill in unused["skills"]
+        ]
+        _discord_section(
+            lines,
+            (
+                f"**Unused skills** ({unused['never_used_count']} of {unused['total_skills']}, "
+                f"{unused['never_used_cost']:,} / {unused['total_catalog_cost']:,} catalog chars)"
+            ),
+            unused_entries,
+            unused["never_used_count"],
+        )
+
+    lines.extend(["", _discord_domain_fit(domain_fit), ""])
+    lines.extend(_discord_lane_ideation(lane_ideation_data))
+    if context_churn is not None:
+        lines.extend(["", _discord_context_churn(context_churn)])
+
+    summary = "\n".join(lines)
+    if len(summary) <= DISCORD_MESSAGE_LIMIT:
+        return summary
+    return summary[:DISCORD_MESSAGE_LIMIT - 16].rstrip() + "\n… truncated"
+
+
 def emit_summary(oversized, repeats, unused, domain_fit, lane_ideation_data,
                  context_churn=None):
     """Return a short human-readable summary string."""
@@ -1378,7 +1534,7 @@ def main():
     )
     parser.add_argument(
         "--format",
-        choices=["json", "summary", "both"],
+        choices=["json", "summary", "discord", "both"],
         default="both",
         help="Output format",
     )
@@ -1407,6 +1563,20 @@ def main():
             args.output.write_text(report["summary"])
         elif not args.output or args.format == "both":
             print(report["summary"])
+
+    if args.format == "discord":
+        discord_summary = emit_discord_summary(
+            report["findings"]["oversized_results"],
+            report["findings"]["repeated_commands"],
+            report["findings"]["unused_skills"],
+            report["findings"]["domain_fit"],
+            report["findings"]["lane_ideation"],
+            report["findings"]["context_churn"],
+        )
+        if args.output:
+            args.output.write_text(discord_summary)
+        else:
+            print(discord_summary)
 
 
 if __name__ == "__main__":
