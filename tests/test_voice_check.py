@@ -22,6 +22,12 @@ class VoiceCheckTest(unittest.TestCase):
         self.assertIn("<stdin>:2: rule 6:", result.stdout)
         self.assertIn("<stdin>:2: rule 15:", result.stdout)
 
+    def test_google_style_conventions_are_flagged(self):
+        result = voice_check("Simply see [here](x), e.g. on 10/8/26.\n")
+        self.assertEqual(result.returncode, 1)
+        for rule in (30, 31, 32):
+            self.assertIn(f"<stdin>:1: rule {rule}:", result.stdout)
+
     def test_code_is_not_prose(self):
         text = "Run `leverage --robust` first.\n```\nenhance()  # crucial\n```\n"
         self.assertEqual(voice_check(text).returncode, 0)

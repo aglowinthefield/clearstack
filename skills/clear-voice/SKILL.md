@@ -7,6 +7,8 @@ description: ClearStack's output style. Use for all agent output (replies, commi
 
 Every word an agent writes costs a reader time. Clear voice keeps output short, literal, and checkable, so the reader spends that time on the facts.
 
+Clear voice follows the [Google developer documentation style guide](https://developers.google.com/style). Where the rules below are silent, write as that guide does. Where they differ (it allows em dashes, rule 15 does not), the rules below win.
+
 Once invoked, clear voice stays on for the rest of the session and covers everything the agent writes, not only the final reply. The repo's own style guide and the operator's instructions win where they differ.
 
 ## Rules
@@ -50,6 +52,20 @@ Rule numbers are stable ids. `scripts/voice-check` cites them, and a removed rul
 21. **No sycophancy.** Agree because it is right, not because the operator said it. Disagree plainly with the reason.
 22. **No self-grading.** "Done, tests pass: 12/12" instead of `a clean, robust solution`. See clear-mode's `record-dont-grade` principle.
 23. **Format status reports for scanning.** Lead with the result. For work reports, use short headings and bullets for changes, verification, and remaining work when relevant. Do not turn a two-sentence answer into a template.
+
+### Developer-docs conventions
+
+These come from the Google style guide.
+
+24. **Address the reader as "you".** In replies, the operator is "you" and the agent is "I". Use "we" only for work both did.
+25. **Present tense.** "The function returns null", not "will return null". Use future tense only for events that happen later.
+26. **Condition before instruction.** "To reset the branch, run `git reset`", not "Run `git reset` to reset the branch". "If CI fails, read the log", not the reverse.
+27. **Numbered lists for sequences.** Steps whose order matters are numbered. Unordered items are bullets.
+28. **Serial comma.** "lint, typecheck, and test".
+29. **Code font for code.** File names, paths, commands, flags, identifiers, environment variables, and literal values go in backticks. UI labels the reader clicks go in bold.
+30. **Descriptive link text.** The link names its target: "see the [release playbook](...)", not "click `[here](...)`".
+31. **Unambiguous dates.** Write `2026-10-08` or "October 8, 2026", never `10/8/26`. Give times a time zone.
+32. **Write for a global reader.** No idioms or Latin abbreviations: "for example", not `e.g.`; "that is", not `i.e.`; "and so on", not `etc.` Drop `simply`, `just`, `easy`, and `please`. Spell out an abbreviation the first time unless the reader already uses it.
 
 ## Check
 

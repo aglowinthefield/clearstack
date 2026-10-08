@@ -58,7 +58,7 @@ When it stops early, it leaves the work committed with a handoff note and names 
 
 ## Clear voice
 
-`clear-voice` is the output style for everything an agent writes: replies, commit messages, PR bodies, handoff notes, and run-record entries. It leads with the answer, keeps length matched to the ask, and drops stock AI vocabulary, filler, chatbot phrases, and em dashes. It governs content and density, so an operator-chosen persona still works.
+`clear-voice` is the output style for everything an agent writes: replies, commit messages, PR bodies, handoff notes, and run-record entries. It leads with the answer, keeps length matched to the ask, and drops stock AI vocabulary, filler, chatbot phrases, and em dashes. It follows the Google developer documentation style guide where its own rules are silent. It governs content and density, so an operator-chosen persona still works.
 
 The rules are numbered in [`skills/clear-voice/SKILL.md`](skills/clear-voice/SKILL.md). `scripts/voice-check` flags the ones a script can see, with file, line, and rule id:
 

@@ -21,6 +21,10 @@ CHECKS = [
     (14, r"\bnot (just|only|merely) [^.]{1,60}?,? but\b", "'not just X, but Y': state the point"),
     (15, r"\u2014", "em dash: use a period or comma"),
     (18, r"[\u201c\u201d\u2018\u2019]", "curly quote: use straight quotes"),
+    (30, r"\[(here|click here|this link|link)\]", "link text: name the target"),
+    (31, r"\b\d{1,2}/\d{1,2}/\d{2,4}\b", "ambiguous date: use YYYY-MM-DD"),
+    (32, r"(\be\.g\.|\bi\.e\.|\betc\.)", "Latin abbreviation: for example, that is, and so on"),
+    (32, r"\b(simply|please)\b", "drop the softener"),
     (20, r"\b(great question|certainly!|i hope this helps|let me know if|happy to help|absolutely right)\b", "chatbot phrase"),
 ]
 COMPILED = [(rule, re.compile(p, re.IGNORECASE), msg) for rule, p, msg in CHECKS]
