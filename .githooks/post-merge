@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Link every skill into ~/.agents/skills and ~/.claude/skills, and drop links to removed skills.
+
+root=$(git rev-parse --show-toplevel)
+
+for dir in ~/.agents/skills ~/.claude/skills; do
+    [ -d "$dir" ] || continue
+    for link in "$dir"/*; do
+        [ -L "$link" ] && [ ! -e "$link" ] && [[ $(readlink "$link") == "$root"/* ]] && rm "$link"
+    done
+    for skill in "$root"/skills/*/SKILL.md; do
+        name=$(basename "$(dirname "$skill")")
+        [ -e "$dir/$name" ] || ln -s "$root/skills/$name" "$dir/$name"
+    done
+done
