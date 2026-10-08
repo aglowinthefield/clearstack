@@ -77,13 +77,28 @@ class NormalizeCallTest(unittest.TestCase):
         })
         self.assertEqual(norm, "terminal: ls")
 
-    def test_read_file_ignores_offset(self):
-        norm = mine_module.normalize_call("read_file", {
-            "path": "/a/b.py",
-            "offset": 10,
-            "limit": 20,
-        })
-        self.assertEqual(norm, "read_file: /a/b.py")
+    def test_read_file_keys_on_range(self):
+        def norm(offset, limit):
+            return mine_module.normalize_call("read_file", {
+                "path": "/a/b.py", "offset": offset, "limit": limit,
+            })
+        self.assertEqual(norm(10, 20), "read_file: /a/b.py [10:20]")
+        self.assertEqual(norm(10, 20), norm(10, 20))
+        self.assertNotEqual(norm(10, 20), norm(30, 20))
+
+    def test_generic_tool_keys_on_argument_values(self):
+        github = mine_module.normalize_call("skill_view", {"name": "github"})
+        review = mine_module.normalize_call("skill_view", {"name": "code-review"})
+        self.assertNotEqual(github, review)
+        self.assertEqual(github, mine_module.normalize_call("skill_view", {"name": "github"}))
+
+    def test_generic_tool_long_arguments_stay_distinct(self):
+        def norm(new):
+            return mine_module.normalize_call("patch", {
+                "path": "/a/b.py", "old_string": "x" * 500, "new_string": new,
+            })
+        self.assertNotEqual(norm("one"), norm("two"))
+        self.assertLess(len(norm("one")), 200)
 
     def test_search_files_uses_pattern(self):
         norm = mine_module.normalize_call("search_files", {
@@ -141,7 +156,7 @@ class RepeatedCommandsTest(unittest.TestCase):
         self.assertEqual(findings[0]["tool_name"], "terminal")
         self.assertFalse(findings[0]["compaction_adjacent"])
 
-    def test_normalization_collapses_trivial_differences(self):
+    def test_paging_through_a_file_is_not_a_repeat(self):
         conn = _make_db()
         for i in range(3):
             args = json.dumps({"path": "/a.py", "offset": i + 1})
@@ -152,9 +167,8 @@ class RepeatedCommandsTest(unittest.TestCase):
         findings = mine_module.mine_repeats(conn, min_count=3)
         conn.close()
 
-        # Same path with different offsets collapses to one normalized command.
-        self.assertEqual(len(findings), 1)
-        self.assertEqual(findings[0]["normalized_command"], "read_file: /a.py")
+        # Each offset reads different content, so three pages are not three repeats.
+        self.assertEqual(findings, [])
 
     def test_compaction_adjacent_flagged_when_spanning(self):
         conn = _make_db()

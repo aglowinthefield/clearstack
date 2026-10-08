@@ -6,6 +6,7 @@ Proposes, never applies. Emit a machine-readable report and a short human summar
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -98,6 +99,7 @@ DEFAULT_SCRIPTS_DIR = Path.home() / ".hermes" / "scripts"
 DEFAULT_KANBAN_BOARDS_DIR = Path.home() / ".hermes" / "kanban" / "boards"
 SIZE_THRESHOLD = 20000
 REPEAT_MIN_COUNT = 3
+REPEAT_KEY_DISPLAY_LIMIT = 100
 DISCORD_MESSAGE_LIMIT = 1900
 DISCORD_ITEMS_PER_SECTION = 5
 DISCORD_LABEL_LIMIT = 80
@@ -173,8 +175,14 @@ def normalize_call(tool_name, arguments):
         return f"terminal: {cmd}"
 
     if tool_name == "read_file":
+        # Paging through a file reads different content each call; only the
+        # same range read again is a repeat.
         path = arguments.get("path", "")
-        return f"read_file: {path}"
+        offset = arguments.get("offset")
+        limit = arguments.get("limit")
+        if offset is None and limit is None:
+            return f"read_file: {path}"
+        return f"read_file: {path} [{offset}:{limit}]"
 
     if tool_name == "search_files":
         pattern = arguments.get("pattern", "")
@@ -190,8 +198,13 @@ def normalize_call(tool_name, arguments):
         query = arguments.get("query", "")
         return f"web_search: {query}"
 
-    keys = tuple(sorted(arguments.keys()))
-    return f"{tool_name}({keys})"
+    # Key on argument values, not names: skill_view of two different skills,
+    # or two different patches, share every key but are not repeats.
+    canonical = json.dumps(arguments, sort_keys=True, default=str)
+    if len(canonical) > REPEAT_KEY_DISPLAY_LIMIT:
+        digest = hashlib.sha1(canonical.encode()).hexdigest()[:10]
+        canonical = f"{canonical[:REPEAT_KEY_DISPLAY_LIMIT]}… #{digest}"
+    return f"{tool_name}({canonical})"
 
 
 def command_shape(tool_name, arguments):
