@@ -7,6 +7,7 @@ Proposes, never applies. Emit a machine-readable report and a short human summar
 
 import argparse
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -804,7 +805,13 @@ def mine_unused_skills(
 # Domain-fit detector
 # ---------------------------------------------------------------------------
 
-DEFAULT_DOMAIN_MAP = Path(__file__).resolve().parent.parent / "references" / "domain-map.yaml"
+def _default_domain_map():
+    """The map is per-user config: it names your own profiles, skills, and repos."""
+    config_home = os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
+    return Path(config_home) / "clearstack" / "domain-map.yaml"
+
+
+DEFAULT_DOMAIN_MAP = _default_domain_map()
 
 
 def load_domain_map(path):

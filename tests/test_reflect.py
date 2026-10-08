@@ -3,6 +3,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+import unittest.mock
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -726,7 +727,7 @@ class DomainFitTest(unittest.TestCase):
     def test_routing_mismatch(self):
         with tempfile.TemporaryDirectory() as td:
             map_path = self._make_domain_map(td, {
-                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"silk-remix"]},
+                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"acme-app"]},
                 "review": {"profiles": ["jester"], "skills": [], "signals": []},
             })
             skills_dir = self._make_skills_dir(td, {})
@@ -750,7 +751,7 @@ class DomainFitTest(unittest.TestCase):
             )
             conn.execute(
                 "INSERT INTO tasks (id, title, body, assignee, status) VALUES (?, ?, ?, ?, ?)",
-                ("t1", "Fix silk-remix build", "Body", "jester", "running"),
+                ("t1", "Fix acme-app build", "Body", "jester", "running"),
             )
             conn.commit()
             conn.close()
@@ -955,7 +956,7 @@ class DomainFitTest(unittest.TestCase):
     def test_review_routing_mismatch_skipped(self):
         with tempfile.TemporaryDirectory() as td:
             map_path = self._make_domain_map(td, {
-                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"silk-remix"]},
+                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"acme-app"]},
                 "review": {"profiles": ["jester"], "skills": [], "signals": []},
             })
             skills_dir = self._make_skills_dir(td, {})
@@ -979,7 +980,7 @@ class DomainFitTest(unittest.TestCase):
             )
             conn.execute(
                 "INSERT INTO tasks (id, title, body, assignee, status) VALUES (?, ?, ?, ?, ?)",
-                ("t1", "Fix silk-remix build", "Body", "jester", "running"),
+                ("t1", "Fix acme-app build", "Body", "jester", "running"),
             )
             conn.commit()
             conn.close()
@@ -1034,7 +1035,7 @@ class DomainFitTest(unittest.TestCase):
     def test_archived_card_skipped(self):
         with tempfile.TemporaryDirectory() as td:
             map_path = self._make_domain_map(td, {
-                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"silk-remix"]},
+                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"acme-app"]},
             })
             skills_dir = self._make_skills_dir(td, {})
             state_db = self._make_state_db(td, [])
@@ -1057,7 +1058,7 @@ class DomainFitTest(unittest.TestCase):
             )
             conn.execute(
                 "INSERT INTO tasks (id, title, body, assignee, status) VALUES (?, ?, ?, ?, ?)",
-                ("t1", "Fix silk-remix build", "Body", "jester", "archived"),
+                ("t1", "Fix acme-app build", "Body", "jester", "archived"),
             )
             conn.commit()
             conn.close()
@@ -1071,7 +1072,7 @@ class DomainFitTest(unittest.TestCase):
     def test_done_card_skipped(self):
         with tempfile.TemporaryDirectory() as td:
             map_path = self._make_domain_map(td, {
-                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"silk-remix"]},
+                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"acme-app"]},
             })
             skills_dir = self._make_skills_dir(td, {})
             state_db = self._make_state_db(td, [])
@@ -1094,7 +1095,7 @@ class DomainFitTest(unittest.TestCase):
             )
             conn.execute(
                 "INSERT INTO tasks (id, title, body, assignee, status) VALUES (?, ?, ?, ?, ?)",
-                ("t1", "Fix silk-remix build", "Body", "jester", "done"),
+                ("t1", "Fix acme-app build", "Body", "jester", "done"),
             )
             conn.commit()
             conn.close()
@@ -1108,7 +1109,7 @@ class DomainFitTest(unittest.TestCase):
     def test_unmapped_assignee_skipped(self):
         with tempfile.TemporaryDirectory() as td:
             map_path = self._make_domain_map(td, {
-                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"silk-remix"]},
+                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"acme-app"]},
             })
             skills_dir = self._make_skills_dir(td, {})
             state_db = self._make_state_db(td, [])
@@ -1131,7 +1132,7 @@ class DomainFitTest(unittest.TestCase):
             )
             conn.execute(
                 "INSERT INTO tasks (id, title, body, assignee, status) VALUES (?, ?, ?, ?, ?)",
-                ("t1", "Fix silk-remix build", "Body", "tom", "running"),
+                ("t1", "Fix acme-app build", "Body", "tom", "running"),
             )
             conn.commit()
             conn.close()
@@ -1145,7 +1146,7 @@ class DomainFitTest(unittest.TestCase):
     def test_generalist_assignee_skipped(self):
         with tempfile.TemporaryDirectory() as td:
             map_path = self._make_domain_map(td, {
-                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"silk-remix"]},
+                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"acme-app"]},
                 "generalist": {"profiles": ["default"], "skills": [], "signals": []},
             })
             skills_dir = self._make_skills_dir(td, {})
@@ -1169,7 +1170,7 @@ class DomainFitTest(unittest.TestCase):
             )
             conn.execute(
                 "INSERT INTO tasks (id, title, body, assignee, status) VALUES (?, ?, ?, ?, ?)",
-                ("t1", "Fix silk-remix build", "Body", "default", "running"),
+                ("t1", "Fix acme-app build", "Body", "default", "running"),
             )
             conn.commit()
             conn.close()
@@ -1183,7 +1184,7 @@ class DomainFitTest(unittest.TestCase):
     def test_multi_domain_match_collapses_to_strongest(self):
         with tempfile.TemporaryDirectory() as td:
             map_path = self._make_domain_map(td, {
-                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"silk-remix", r"npm"]},
+                "product": {"profiles": ["scribe"], "skills": [], "signals": [r"acme-app", r"npm"]},
                 "home": {"profiles": [], "skills": [], "signals": [r"chezmoi"]},
                 "investigate": {"profiles": ["page"], "skills": [], "signals": []},
             })
@@ -1209,7 +1210,7 @@ class DomainFitTest(unittest.TestCase):
             # product has 2 hits, home has 1 hit.
             conn.execute(
                 "INSERT INTO tasks (id, title, body, assignee, status) VALUES (?, ?, ?, ?, ?)",
-                ("t1", "silk-remix npm and chezmoi", "Body", "page", "running"),
+                ("t1", "acme-app npm and chezmoi", "Body", "page", "running"),
             )
             conn.commit()
             conn.close()
@@ -1266,7 +1267,7 @@ class ContextChurnTest(unittest.TestCase):
         conn.close()
         return db_path
 
-    def _make_board(self, boards_dir, board="silk"):
+    def _make_board(self, boards_dir, board="acme"):
         board_dir = Path(boards_dir) / board
         board_dir.mkdir(parents=True)
         conn = sqlite3.connect(board_dir / "kanban.db")
@@ -1317,7 +1318,7 @@ class ContextChurnTest(unittest.TestCase):
         self.assertEqual(top["task_id"], "t_aaa")
         self.assertEqual(top["runs"], 3)
         self.assertEqual(top["title"], "Churned card")
-        self.assertEqual(top["board"], "silk")
+        self.assertEqual(top["board"], "acme")
         # t_aaa holds 9.45M of 9.56M card tokens
         self.assertGreater(mr["token_share_pct"], 95)
         self.assertTrue(any("triage" in p for p in result["proposals"]))
@@ -1354,8 +1355,16 @@ class ContextChurnTest(unittest.TestCase):
 
 
 class YamlSubsetLoadTest(unittest.TestCase):
-    def test_parses_the_real_domain_map(self):
-        text = (MINE.parents[3] / "skills" / "clear-reflect" / "references" / "domain-map.yaml").read_text()
+    def test_default_map_is_user_config(self):
+        with unittest.mock.patch.dict("os.environ", {"XDG_CONFIG_HOME": "/cfg"}):
+            self.assertEqual(mine_module._default_domain_map(), Path("/cfg/clearstack/domain-map.yaml"))
+        with unittest.mock.patch.dict("os.environ", {"XDG_CONFIG_HOME": ""}):
+            self.assertEqual(
+                mine_module._default_domain_map(), Path.home() / ".config" / "clearstack" / "domain-map.yaml"
+            )
+
+    def test_parses_the_example_domain_map(self):
+        text = (MINE.parents[3] / "skills" / "clear-reflect" / "references" / "domain-map.example.yaml").read_text()
         data = mine_module._yaml_subset_load(text)
         self.assertEqual(data["version"], 1)
         domains = data["domains"]
@@ -1368,7 +1377,7 @@ class YamlSubsetLoadTest(unittest.TestCase):
         self.assertTrue(any("npm" in s for s in domains["product"]["signals"]))
 
     def test_safe_load_falls_back_without_pyyaml(self):
-        text = (MINE.parents[3] / "skills" / "clear-reflect" / "references" / "domain-map.yaml").read_text()
+        text = (MINE.parents[3] / "skills" / "clear-reflect" / "references" / "domain-map.example.yaml").read_text()
         saved = mine_module.yaml
         try:
             mine_module.yaml = None

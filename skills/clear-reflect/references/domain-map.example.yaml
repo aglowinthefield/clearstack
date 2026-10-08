@@ -1,0 +1,78 @@
+# Domain map example. Copy to ~/.config/clearstack/domain-map.yaml (or
+# $XDG_CONFIG_HOME/clearstack/domain-map.yaml) and replace the profiles,
+# skills, and signals with your own; pass --domain-map to use another path.
+#
+# A domain owns skills and is served by profile(s). "signals" are command
+# patterns that mark work in that domain when seen in terminal history.
+# Unassigned domains have no lane yet: the audit watches for their signals
+# in other profiles' sessions to decide when they earn one.
+version: 1
+
+domains:
+
+  product:
+    # Product implementation. Lane exists: scribe.
+    profiles: [scribe]
+    skills:
+      - github
+      - test-driven-development
+      - systematic-debugging
+    signals:
+      - '\b(npm|npx|pnpm|node --|pytest|jest)\b'
+      - 'acme-app'
+
+  review:
+    # Read-mostly judgment of others' work. Lane exists: jester.
+    profiles: [jester]
+    skills:
+      - requesting-code-review
+    signals:
+      - '\bgh (pr|run) (view|diff|checks|review)\b'
+
+  investigate:
+    # Read-only research and diagnosis. Lane exists: page.
+    profiles: [page]
+    skills:
+      - grounded-citations
+    signals:
+      - '\bgh (issue|pr) view\b'
+
+  orchestration:
+    # Decomposing and routing work. Lane exists: princess.
+    profiles: [princess]
+    skills:
+      - hermes-kanban
+    signals:
+      - '\bhermes kanban\b'
+
+  infra:
+    # Deploys and prod data. NO LANE YET: the audit watches for these signals
+    # in other profiles to decide when this domain earns one.
+    profiles: []
+    skills:
+      - ci-deployments
+    signals:
+      - '\b(fly|flyctl|wrangler|kubectl|terraform)\b'
+
+  home:
+    # This machine, dotfiles, the agent harness itself. NO LANE YET.
+    profiles: []
+    skills:
+      - hermes-agent
+    signals:
+      - '\bhermes (config|skills|plugins|cron|gateway|update)\b'
+
+  shared:
+    # Skills any profile may use without a cross-domain flag. The detector
+    # treats this domain as never-flagged in both directions.
+    profiles: []
+    skills:
+      - humanizer
+    signals: []
+
+  generalist:
+    # Interactive default profile. Owns no exclusive skills and is never
+    # flagged: roaming every domain is its job.
+    profiles: [default]
+    skills: []
+    signals: []

@@ -61,7 +61,7 @@ Flag installed skills that never appear in tool-call history (`skill_view`, `ski
 
 ### Domain fit
 
-Audit whether domain-separated agents stay in their domains. The detector reads `references/domain-map.yaml`, which declares each domain's profiles, skills, and command signals. Pass `--domain-map` to override the map path.
+Audit whether domain-separated agents stay in their domains. The detector reads `~/.config/clearstack/domain-map.yaml` (or `$XDG_CONFIG_HOME/clearstack/domain-map.yaml`), which declares each domain's profiles, skills, and command signals. The map is per-user config; start from `references/domain-map.example.yaml`. Pass `--domain-map` to override the map path.
 
 Four checks, per profile:
 

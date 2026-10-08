@@ -26,7 +26,7 @@ class TestLaneIdeation(unittest.TestCase):
             "domains": {
                 "product": {
                     "profiles": ["scribe"],
-                    "skills": {"github", "silk-agent-map"},
+                    "skills": {"github", "acme-agent-map"},
                     "signals": [re.compile(r"\bnpm\b")],
                 },
                 "investigate": {
