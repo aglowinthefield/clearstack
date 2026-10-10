@@ -37,6 +37,38 @@ When testing these commands, use a stub miner or set `HOME` to a temporary direc
 
 ## Detectors
 
+### Review outcomes
+
+Compare review passbacks using Kanban board events, worker run intervals, and
+`session_model_usage` across the default and profile databases. The report includes:
+
+- First-review passbacks divided by resolved first reviews, with pending reviews shown separately.
+- Review rounds per card, including cards still in review.
+- Returns from the human review lane after AI approval, divided by resolved human handoffs.
+- Median elapsed time and input, cache, and output tokens through the first AI approval,
+  with separate sample sizes for approvals and cards with complete usage.
+- Rates by the implementer and reviewer models that actually ran. Multiple models in one
+  run remain a mixed group. Missing attribution stays unknown; a configured model is never
+  credited as if it ran. Auxiliary calls do not determine the main model group.
+
+The comparison boundary comes from `~/.hermes/scripts/review-baseline.json` when present:
+
+```json
+{"changed_at": "2026-01-01T00:00:00Z", "description": "Profile model configuration changed"}
+```
+
+Override it with `scripts/mine --review-change-at 2026-01-01T00:00:00Z --format summary`.
+Without a boundary, the report shows all available review history. Cards whose work spans
+the boundary form a separate `crossed_change` group. Model pairs remain separate by board
+and cohort. The JSON and full summary contain the comparison; the Discord summary shows
+the overall first-review count and pending count.
+
+These are workflow measurements, not a controlled model comparison. A human-lane reopen
+records a return, not proof that the AI reviewer missed a defect. Completion after a handoff
+resolves that handoff; it does not prove who clicked Done. Legacy per-model usage may have
+been backfilled from session totals, so historical attribution has that limitation. Missing
+session links or token receipts exclude a card from the token median rather than making it free.
+
 ### Oversized tool results
 
 Flag tool results over 20K chars, grouped by tool name and command shape, so a guard can cap, filter, or redirect them to a file.

@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lane_ideation
+import review_outcomes
 
 try:
     import yaml
@@ -1244,9 +1245,16 @@ def _discord_context_churn(context_churn):
 
 
 def emit_discord_summary(oversized, repeats, unused, domain_fit,
-                         lane_ideation_data, context_churn=None):
+                         lane_ideation_data, context_churn=None, reviews=None):
     """Return a compact Markdown report that fits in one Discord message."""
     lines = []
+    if reviews is not None:
+        rows = reviews["cohorts"]
+        returned = sum(r["first_passbacks"] for r in rows)
+        resolved = sum(r["first_reviews_resolved"] for r in rows)
+        pending = sum(r["pending_reviews"] for r in rows)
+        lines.extend([f"**Review outcomes**: {returned}/{resolved} first-review passbacks, "
+                      f"{pending} pending; cohorts and model pairs in the full report", ""])
     oversized_entries = [
         (
             f"- {_discord_code(_discord_oversized_label(f))} x{f['count']}, "
@@ -1309,7 +1317,7 @@ def emit_discord_summary(oversized, repeats, unused, domain_fit,
 
 
 def emit_summary(oversized, repeats, unused, domain_fit, lane_ideation_data,
-                 context_churn=None):
+                 context_churn=None, reviews=None):
     """Return a short human-readable summary string."""
     lines = []
     lines.append(
@@ -1384,6 +1392,9 @@ def emit_summary(oversized, repeats, unused, domain_fit, lane_ideation_data,
     lines.append("")
     lines.append(lane_ideation.format_lane_ideation_summary(lane_ideation_data))
 
+    if reviews is not None:
+        lines.extend(["", review_outcomes.format_summary(reviews)])
+
     # Context churn
     if context_churn is not None:
         lines.append("")
@@ -1425,7 +1436,7 @@ def emit_summary(oversized, repeats, unused, domain_fit, lane_ideation_data,
 
 def mine(state_db_path, runs_path, skills_dir=None, agent_hooks_dir=None,
          scripts_dir=None, boards_dir=None, profile_dbs_dir=None,
-         domain_map_path=None):
+         domain_map_path=None, review_change_at=None):
     """Run all detectors and return the full report dict."""
     report = {
         "generated_at": None,
@@ -1489,6 +1500,17 @@ def mine(state_db_path, runs_path, skills_dir=None, agent_hooks_dir=None,
         state_db_path, profile_dbs_dir, boards_dir
     )
 
+    baseline = Path(scripts_dir) / "review-baseline.json"
+    if review_change_at is None and baseline.is_file():
+        data = json.loads(baseline.read_text())
+        review_change_at = parse_review_change_at(data["changed_at"])
+        report["sources"]["review_change"] = {"path": str(baseline), **data}
+    else:
+        report["sources"]["review_change"] = {"timestamp": review_change_at}
+    report["findings"]["review_outcomes"] = review_outcomes.mine_reviews(
+        _state_db_sources(state_db_path, profile_dbs_dir), boards_dir, review_change_at
+    )
+
     report["summary"] = emit_summary(
         report["findings"]["oversized_results"],
         report["findings"]["repeated_commands"],
@@ -1496,8 +1518,17 @@ def mine(state_db_path, runs_path, skills_dir=None, agent_hooks_dir=None,
         report["findings"]["domain_fit"],
         report["findings"]["lane_ideation"],
         report["findings"]["context_churn"],
+        report["findings"]["review_outcomes"],
     )
     return report
+
+
+def parse_review_change_at(value):
+    """Require an explicit timezone for a before/after comparison boundary."""
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("review change timestamp must include a timezone")
+    return parsed.timestamp()
 
 
 def main():
@@ -1548,6 +1579,12 @@ def main():
         help="Path to domain map YAML",
     )
     parser.add_argument(
+        "--review-change-at",
+        type=parse_review_change_at,
+        help="Compare review outcomes before/after this ISO timestamp with timezone; "
+             "defaults to scripts-dir/review-baseline.json when present",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         help="Write output to this file",
@@ -1568,6 +1605,7 @@ def main():
         scripts_dir=args.scripts_dir,
         boards_dir=args.boards_dir,
         domain_map_path=args.domain_map,
+        review_change_at=args.review_change_at,
     )
     report["generated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -1592,6 +1630,7 @@ def main():
             report["findings"]["domain_fit"],
             report["findings"]["lane_ideation"],
             report["findings"]["context_churn"],
+            report["findings"]["review_outcomes"],
         )
         if args.output:
             args.output.write_text(discord_summary)
