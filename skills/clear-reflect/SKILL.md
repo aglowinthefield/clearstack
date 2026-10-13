@@ -31,7 +31,9 @@ scripts/mine --format json --output report.json
 
 By default it reads `~/.hermes/state.db` and `~/.local/state/clearstack/runs.jsonl`. Pass `--db` or `--runs` to override.
 
-For the Context churn section only, run `scripts/churn-report`. It calls `mine --format summary` with the existing source selection, including profile state databases. Miner stderr remains visible, and a miner failure keeps its nonzero exit status without printing a partial report. A summary without a Context churn section also fails.
+For the Context churn section only, run `scripts/churn-report`. It calls `mine --format summary` with the existing source selection, including profile state databases.
+
+Miner stderr remains visible, and a miner failure keeps its nonzero exit status without printing a partial report. A summary without a Context churn section also fails.
 
 When testing these commands, use a stub miner or set `HOME` to a temporary directory. Passing `--db` alone does not isolate the miner's profile scans.
 
@@ -58,16 +60,20 @@ The comparison boundary comes from `~/.hermes/scripts/review-baseline.json` when
 ```
 
 Override it with `scripts/mine --review-change-at 2026-01-01T00:00:00Z --format summary`.
-Without a boundary, the report shows all available review history. Cards whose work spans
-the boundary form a separate `crossed_change` group. Model pairs remain separate by board
-and cohort. The JSON and full summary contain the comparison; the Discord summary shows
-the overall first-review count and pending count.
+Without a boundary, the report shows all available review history.
 
-These are workflow measurements, not a controlled model comparison. A human-lane reopen
-records a return, not proof that the AI reviewer missed a defect. Completion after a handoff
-resolves that handoff; it does not prove who clicked Done. Legacy per-model usage may have
-been backfilled from session totals, so historical attribution has that limitation. Missing
-session links or token receipts exclude a card from the token median rather than making it free.
+Cards whose work spans the boundary form a separate `crossed_change` group. Model pairs
+remain separate by board and cohort. The JSON and full summary contain the comparison; the
+Discord summary shows the overall first-review count and pending count.
+
+These are workflow measurements, not a controlled model comparison:
+
+- A human-lane reopen records a return, not proof that the AI reviewer missed a defect.
+- Completion after a handoff resolves that handoff; it does not prove who clicked Done.
+- Legacy per-model usage may have been backfilled from session totals, so historical
+  attribution has that limitation.
+- Missing session links or token receipts exclude a card from the token median rather than
+  making it free.
 
 ### Oversized tool results
 
@@ -93,7 +99,9 @@ Flag installed skills that never appear in tool-call history (`skill_view`, `ski
 
 ### Domain fit
 
-Audit whether domain-separated agents stay in their domains. The detector reads `~/.config/clearstack/domain-map.yaml` (or `$XDG_CONFIG_HOME/clearstack/domain-map.yaml`), which declares each domain's profiles, skills, and command signals. The map is per-user config; start from `references/domain-map.example.yaml`. Pass `--domain-map` to override the map path.
+Audit whether domain-separated agents stay in their domains. The detector reads `~/.config/clearstack/domain-map.yaml` (or `$XDG_CONFIG_HOME/clearstack/domain-map.yaml`), which declares each domain's profiles, skills, and command signals.
+
+The map is per-user config; start from `references/domain-map.example.yaml`. Pass `--domain-map` to override the map path.
 
 Four checks, per profile:
 

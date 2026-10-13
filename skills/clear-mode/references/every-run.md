@@ -2,7 +2,11 @@
 
 ## Task source
 
-For tracked work, read the current task from its task-tracking platform before planning or changing code. Use the supplied task URL or the repository's configured tracker to identify the platform, then use its available integration. A task ID alone does not identify the platform. If the source is missing or inaccessible, ask for it rather than guessing. Use the current task as the specification, subject to the operator's instructions and repository rules. Treat copied card descriptions and handoff summaries as context, not replacements for the source. Keep the task ID and URL in the run context instead of copying the full description. Ad hoc work uses the operator's request and needs no tracker.
+For tracked work, read the current task from its task-tracking platform before planning or changing code. Use the supplied task URL or the repository's configured tracker to identify the platform, then use its available integration. A task ID alone does not identify the platform.
+
+If the source is missing or inaccessible, ask for it rather than guessing. Use the current task as the specification, subject to the operator's instructions and repository rules.
+
+Treat copied card descriptions and handoff summaries as context, not replacements for the source. Keep the task ID and URL in the run context instead of copying the full description. Ad hoc work uses the operator's request and needs no tracker.
 
 ## Steps
 

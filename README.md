@@ -58,7 +58,9 @@ When it stops early, it leaves the work committed with a handoff note and names 
 
 ## Clear voice
 
-`clear-voice` is the output style for everything an agent writes: replies, commit messages, PR bodies, handoff notes, and run-record entries. It leads with the answer, keeps length matched to the ask, and drops stock AI vocabulary, filler, chatbot phrases, and em dashes. It follows the Google developer documentation style guide where its own rules are silent. It governs content and density, so an operator-chosen persona still works.
+`clear-voice` is the output style for everything an agent writes: replies, commit messages, PR bodies, handoff notes, and run-record entries. It leads with the answer, keeps length matched to the ask, keeps paragraphs to three sentences, and drops stock AI vocabulary, filler, chatbot phrases, and em dashes.
+
+It follows the Google developer documentation style guide where its own rules are silent. It governs content and density, so an operator-chosen persona still works.
 
 The rules are numbered in [`skills/clear-voice/SKILL.md`](skills/clear-voice/SKILL.md). `scripts/voice-check` flags the ones a script can see, with file, line, and rule id:
 
@@ -131,7 +133,17 @@ Start the read-only run dashboard with:
 python3 -m clearstack.dashboard
 ```
 
-It binds to `127.0.0.1:8765` by default and reads `~/.local/state/clearstack/runs.jsonl` (or `$XDG_STATE_HOME/clearstack/runs.jsonl`). It makes no network requests and does not change the log. Pass `--host <address>` to bind elsewhere, for example a Tailscale address to reach it from another machine on your tailnet; the dashboard has no authentication, so only do this on a network you trust. This first version shows run status, duration, decision notes, and claims. `scripts/record end` reads token, cache, tool-call totals, and a per-tool-name call breakdown from the harness's own local session log (Claude Code's `~/.claude/projects/*/<session>.jsonl`, Codex's `~/.codex/sessions/**/<thread>.jsonl`, or Hermes's `~/.hermes/webui/sessions/<session>.json`) when a matching session id is set in the environment, and stores them on the run record. A run with no matching session log shows "not collected" rather than zero. The table and summary bar show per-run and total cost once any run in the log has telemetry, and a donut chart breaks tool calls down by name, both per run and aggregated across every run with telemetry.
+It binds to `127.0.0.1:8765` by default and reads `~/.local/state/clearstack/runs.jsonl` (or `$XDG_STATE_HOME/clearstack/runs.jsonl`). It makes no network requests and does not change the log.
+
+Pass `--host <address>` to bind elsewhere, for example a Tailscale address to reach it from another machine on your tailnet. The dashboard has no authentication, so only do this on a network you trust.
+
+This first version shows run status, duration, decision notes, and claims. `scripts/record end` reads token, cache, tool-call totals, and a per-tool-name call breakdown from the harness's own local session log when a matching session id is set in the environment, and stores them on the run record. The session logs are:
+
+- Claude Code: `~/.claude/projects/*/<session>.jsonl`
+- Codex: `~/.codex/sessions/**/<thread>.jsonl`
+- Hermes: `~/.hermes/webui/sessions/<session>.json`
+
+A run with no matching session log shows "not collected" rather than zero. The table and summary bar show per-run and total cost once any run in the log has telemetry. A donut chart breaks tool calls down by name, both per run and aggregated across every run with telemetry.
 
 The `/tokens` route shows a token-spend analytics view computed from `~/.hermes/state.db` on each request. It covers the last 14 days with headline totals, fresh input by model, a daily stacked bar chart, session-size buckets, surface breakdown, top sessions, tool-call volume, and fixed per-turn overhead from the system prompts table. A missing or unreadable state.db renders an empty-state note instead of a traceback.
 
@@ -145,7 +157,15 @@ The dashboard should also preserve the user's original request and pending decis
 skills/clear-stats/scripts/outcomes --github
 ```
 
-Each run gets an outcome (landed, reworked, reverted, rejected, partially_landed, not_landed, no_commits, unknown), a confidence (verified when git, GitHub, or a parent verdict decided it; unverified when only the self-report exists), and per-source evidence marked available or unavailable. Missing evidence stays unknown, never zero. GitHub enrichment is opt-in and failure-safe. A repair child its parent rejected through `record confirm` reports outcome `rejected`. The result model is in [`skills/clear-stats/SKILL.md`](skills/clear-stats/SKILL.md).
+Each run gets:
+
+- an outcome: landed, reworked, reverted, rejected, partially_landed, not_landed, no_commits, or unknown.
+- a confidence: verified when git, GitHub, or a parent verdict decided it, and unverified when only the self-report exists.
+- per-source evidence, marked available or unavailable.
+
+Missing evidence stays unknown, never zero. GitHub enrichment is opt-in and failure-safe. A repair child its parent rejected through `record confirm` reports outcome `rejected`.
+
+The result model is in [`skills/clear-stats/SKILL.md`](skills/clear-stats/SKILL.md).
 
 ## Clear reflect
 

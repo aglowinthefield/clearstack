@@ -32,6 +32,23 @@ class VoiceCheckTest(unittest.TestCase):
         text = "Run `leverage --robust` first.\n```\nenhance()  # crucial\n```\n"
         self.assertEqual(voice_check(text).returncode, 0)
 
+    def test_paragraph_over_three_sentences_is_flagged_at_its_first_line(self):
+        text = "Intro line.\n\nOne. Two.\nThree. Four.\n"
+        result = voice_check(text)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("<stdin>:3: rule 33: paragraph has 4 sentences", result.stdout)
+
+    def test_short_paragraphs_and_list_items_pass(self):
+        text = (
+            "One. Two. Three.\n\n"
+            "**Label.** One. Two. Three.\n\n"
+            "- First item. Still first. Third. Fourth.\n"
+            "- Second item, with `a.b. c.d. e.f.` code.\n"
+            "33. **Short paragraphs.** One. Two. Three.\n"
+        )
+        result = voice_check(text)
+        self.assertEqual(result.returncode, 0, result.stdout)
+
     def test_repo_docs_follow_clear_voice(self):
         repo = VOICE_CHECK.parents[3]
         docs = subprocess.run(["git", "ls-files", "*.md"], cwd=repo, capture_output=True, text=True).stdout.split()

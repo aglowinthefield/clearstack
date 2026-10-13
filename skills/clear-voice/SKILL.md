@@ -67,6 +67,13 @@ These come from the Google style guide.
 31. **Unambiguous dates.** Write `2026-10-08` or "October 8, 2026", never `10/8/26`. Give times a time zone.
 32. **Write for a global reader.** No idioms or Latin abbreviations: "for example", not `e.g.`; "that is", not `i.e.`; "and so on", not `etc.` Drop `simply`, `just`, `easy`, and `please`. Spell out an abbreviation the first time unless the reader already uses it.
 
+### Layout
+
+These rules keep text readable in a terminal, where a dense block wraps into a wall.
+
+33. **Short paragraphs.** A paragraph holds three sentences at most. Put a blank line between ideas. If the sentences are parallel facts, make them a list.
+34. **Let the viewer wrap.** In replies, do not hard-wrap prose at a fixed column, since the terminal, web UI, or PR view wraps it to its own width. In files, follow the repo's formatter.
+
 ## Check
 
 Before sending a commit message, PR body, or handoff note, run it through the checker from this skill's directory:
@@ -75,7 +82,7 @@ Before sending a commit message, PR body, or handoff note, run it through the ch
 scripts/voice-check FILE        # or pipe text on stdin
 ```
 
-It flags the rules a script can catch (stock vocabulary, em dashes, chatbot phrases, filler) with line numbers and exits 1 on any hit. It cannot judge rules 1 to 4 or 7, so reread for those.
+It flags the rules a script can catch (stock vocabulary, em dashes, chatbot phrases, filler, paragraphs over three sentences) with line numbers and exits 1 on any hit. It cannot judge rules 1 to 4 or 7, so reread for those.
 
 ## Persona and voice
 

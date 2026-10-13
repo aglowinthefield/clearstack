@@ -30,21 +30,67 @@ CHECKS = [
 COMPILED = [(rule, re.compile(p, re.IGNORECASE), msg) for rule, p, msg in CHECKS]
 INLINE_CODE = re.compile(r"`[^`]*`")
 
+# Rule 33: a prose paragraph holds at most this many sentences. List items are
+# exempt: a list is the fix the rule asks for.
+MAX_SENTENCES = 3
+BLOCK_START = re.compile(r"\s*([-*+]|\d+[.)])\s")  # a list item starts its own block
+NOT_PROSE = re.compile(r"\s*(#|\||<!--)")  # headings, table rows, HTML comments
+LEAD_LABEL = re.compile(r"^\s*\*\*[^*]+\*\*")  # "**Changes.** ..." opens with a label, not a sentence
+LINK_TARGET = re.compile(r"\]\([^)]*\)")
+SENTENCE_END = re.compile(r"[.!?][\"')*_]*(?=\s|$)")
+
+
+def sentence_count(block):
+    prose = LINK_TARGET.sub("]", LEAD_LABEL.sub("", INLINE_CODE.sub("", block)))
+    return len(SENTENCE_END.findall(prose))
+
+
+def long_paragraphs(name, prose_lines):
+    """prose_lines: (line number, text) pairs, with None marking a block break."""
+    hits = []
+    block, start = [], None
+
+    def flush():
+        if block and not BLOCK_START.match(block[0]):
+            count = sentence_count(" ".join(block))
+            if count > MAX_SENTENCES:
+                hits.append(f"{name}:{start}: rule 33: paragraph has {count} sentences: split it or make a list")
+        block.clear()
+
+    for entry in prose_lines:
+        if entry is None:
+            flush()
+            continue
+        number, line = entry
+        if BLOCK_START.match(line):
+            flush()
+        if not block:
+            start = number
+        block.append(line)
+    flush()
+    return hits
+
 
 def check(name, text):
     hits = []
+    prose_lines = []
     in_fence = False
     for number, line in enumerate(text.splitlines(), 1):
         if line.lstrip().startswith("```"):
             in_fence = not in_fence
+            prose_lines.append(None)
             continue
         if in_fence:
             continue
+        if not line.strip() or NOT_PROSE.match(line):
+            prose_lines.append(None)
+        else:
+            prose_lines.append((number, line))
         prose = INLINE_CODE.sub("", line)
         for rule, pattern, msg in COMPILED:
             for match in pattern.finditer(prose):
                 hits.append(f"{name}:{number}: rule {rule}: {msg} ({match.group(0)!r})")
-    return hits
+    return hits + long_paragraphs(name, prose_lines)
 
 
 def main(paths):
