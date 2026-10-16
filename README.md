@@ -192,7 +192,9 @@ Run with `--format json` for machine-readable output, `--format summary` for the
 skills/clear-memory/scripts/triage scan export.jsonl --format summary
 ```
 
-It works with any provider that can export records with an id and text: mem0, file-based memories such as Hermes `MEMORY.md`, or Claude Code's Markdown memory. Decisions go to a local ledger, so a review can stop and resume. See [`skills/clear-memory/SKILL.md`](skills/clear-memory/SKILL.md).
+It works with any provider that can export records with an id and text: mem0, file-based memories such as Hermes `MEMORY.md`, or Claude Code's Markdown memory. Decisions go to a local ledger, so a review can stop and resume.
+
+`scripts/weekly` runs the same scan read-only for a scheduled job and prints the flagged count with a few samples. See [`skills/clear-memory/SKILL.md`](skills/clear-memory/SKILL.md).
 
 ## Status
 

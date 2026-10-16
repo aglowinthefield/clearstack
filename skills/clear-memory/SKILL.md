@@ -47,3 +47,14 @@ scripts/triage from-markdown ~/.hermes/memories/MEMORY.md > memory.json
 ```
 
 Standard-library Python. The script makes no network calls and never changes a provider.
+
+## Scheduled check
+
+`scripts/weekly` exports, scans and prints a short report for a no-agent cron job to deliver: the flagged count by flag, a few samples, and a prompt to start a review. It is read-only and never changes a memory.
+
+```bash
+scripts/weekly --provider mem0 --env-file ~/.hermes/.env --user-id <id>
+scripts/weekly --export-cmd "<command that prints JSON or JSONL>"
+```
+
+`scripts/export-mem0` is the mem0 adapter. Other providers plug in through `--export-cmd`.

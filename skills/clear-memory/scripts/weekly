@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Scheduled memory check: export, scan, and print a short report for delivery.
+
+Read-only: it never changes a memory. It tells the operator how many memories
+the triage flags and shows a few, so a review can be started on purpose.
+
+  weekly --provider mem0 [--env-file PATH] [--user-id ID]
+  weekly --export-cmd "COMMAND THAT PRINTS JSON OR JSONL"
+"""
+
+import argparse
+import json
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ADAPTERS = {"mem0": HERE / "export-mem0"}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--provider", choices=sorted(ADAPTERS))
+    source.add_argument("--export-cmd")
+    parser.add_argument("--env-file")
+    parser.add_argument("--user-id")
+    parser.add_argument("--ledger")
+    parser.add_argument("--samples", type=int, default=5)
+    args = parser.parse_args()
+
+    if args.provider:
+        cmd = [sys.executable, str(ADAPTERS[args.provider])]
+        if args.env_file:
+            cmd += ["--env-file", args.env_file]
+        if args.user_id:
+            cmd += ["--user-id", args.user_id]
+    else:
+        cmd = shlex.split(args.export_cmd)
+    export = subprocess.run(cmd, capture_output=True, text=True)
+    if export.returncode != 0:
+        print(f"clear-memory: export failed (exit {export.returncode}): {export.stderr.strip()[:300]}", file=sys.stderr)
+        return export.returncode
+
+    scan_cmd = [sys.executable, str(HERE / "triage"), "scan", "-"]
+    if args.ledger:
+        scan_cmd += ["--ledger", args.ledger]
+    scan = subprocess.run(scan_cmd, input=export.stdout, capture_output=True, text=True)
+    if scan.returncode != 0:
+        print(f"clear-memory: scan failed: {scan.stderr.strip()[:300]}", file=sys.stderr)
+        return scan.returncode
+    report = json.loads(scan.stdout)
+
+    queued = report["queued"]
+    if queued == 0:
+        print(f"Memory check: {report['total']} memories, nothing flagged.")
+        return 0
+    counts = {k: v for k, v in report["flag_counts"].items() if k != "unflagged"}
+    flags = ", ".join(f"{n} {name}" for name, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+    print(f"Memory check: {queued} of {report['total']} memories flagged ({flags}).")
+    for mem in report["queue"][: args.samples]:
+        print(f"- [{','.join(mem['flags'])}] {mem['text'][:140]}")
+    if queued > args.samples:
+        print(f"- ...and {queued - args.samples} more")
+    print("Ask for a clear-memory review to keep, fix or delete them.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

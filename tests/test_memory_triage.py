@@ -4,7 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-TRIAGE = Path(__file__).resolve().parent.parent / "skills" / "clear-memory" / "scripts" / "triage"
+SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "clear-memory" / "scripts"
+TRIAGE = SCRIPTS / "triage"
+WEEKLY = SCRIPTS / "weekly"
 
 MEMORIES = [
     {"id": "durable", "memory": "Use fnm for Node versions; never nvm.", "created_at": "2026-10-01T00:00:00Z"},
@@ -87,6 +89,37 @@ class TriageTest(unittest.TestCase):
         entries = json.loads(result.stdout)
         self.assertEqual([e["text"] for e in entries], ["First fact.", "Second fact\nspans lines."])
         self.assertTrue(all(e["id"] for e in entries))
+
+
+class WeeklyTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.ledger = str(self.tmp / "ledger.jsonl")
+
+    def weekly(self, records, *extra):
+        export = self.tmp / "export.json"
+        export.write_text(json.dumps(records))
+        return subprocess.run(
+            [str(WEEKLY), "--export-cmd", f"cat {export}", "--ledger", self.ledger, *extra],
+            capture_output=True, text=True,
+        )
+
+    def test_reports_flag_counts_and_samples(self):
+        result = self.weekly(MEMORIES, "--samples", "2")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertTrue(lines[0].startswith("Memory check: 6 of 10 memories flagged"), lines[0])
+        self.assertEqual(sum(line.startswith("- [") for line in lines), 2)
+        self.assertIn("...and 4 more", result.stdout)
+
+    def test_clean_store_prints_one_line(self):
+        result = self.weekly([MEMORIES[0]])
+        self.assertEqual(result.stdout, "Memory check: 1 memories, nothing flagged.\n")
+
+    def test_export_failure_exits_nonzero_with_reason(self):
+        result = subprocess.run([str(WEEKLY), "--export-cmd", "false"], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("export failed", result.stderr)
 
 
 if __name__ == "__main__":
