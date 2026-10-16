@@ -206,7 +206,12 @@ class MineIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "nonexistent.db"
             runs_path = Path(td) / "runs.jsonl"
-            report = mine_module.mine(db_path, runs_path)
+            # Point every scanned directory at the temp dir; the defaults read the real ~/.hermes.
+            empty = Path(td)
+            report = mine_module.mine(
+                db_path, runs_path, skills_dir=empty, agent_hooks_dir=empty, scripts_dir=empty,
+                boards_dir=empty, profile_dbs_dir=empty, domain_map_path=empty / "domains.yaml",
+            )
 
         self.assertIn("state_db", report["sources"])
         self.assertIn("not found", report["sources"]["state_db"]["note"])
