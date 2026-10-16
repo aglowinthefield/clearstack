@@ -31,6 +31,7 @@ Unflagged memories are not proven true. `--all` queues them too, as `keep` sugge
 5. **Bulk-confirm the obvious groups.** Flags 1 and 4 are often hundreds of entries. Show a count and five samples and ask once whether to delete the whole group. Any entry the operator pulls out goes back to the one-by-one queue.
 6. **Apply and record.** Apply each answer with the provider's tools right away, then record it: `scripts/triage decide <id> <keep|update|delete|skip> [--text NEW] [--old CURRENT]`. Pass `--old` on keep so an edit to that memory later puts it back in the queue. Never delete or rewrite a memory the operator has not answered for.
 7. **Resume.** The ledger (`$XDG_STATE_HOME/clearstack/memory-review.jsonl`, or `--ledger`) skips decided memories on the next scan. Stop when the operator says so or the queue is empty, and report: reviewed, kept, updated, deleted, still queued.
+8. **Tighten the writer.** A review only clears the backlog; the next week of turns refills it unless the source changes. Find what wrote the junk: explicit saves by the agent, or a provider that extracts facts from every turn automatically. For automatic extraction, set the provider's extraction instructions from `templates/extraction-instructions.md`, then prove them on a throwaway user id: send a few junk turns and one real preference, confirm only the preference is stored, and delete the test memories. Tell the operator which writer was the source and what changed.
 
 ## Writing a replacement
 

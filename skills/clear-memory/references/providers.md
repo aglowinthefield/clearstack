@@ -21,6 +21,18 @@ done
 
 Apply decisions with the harness's mem0 tools (`mem0_update`, `mem0_delete`) when they exist. Otherwise use `PUT` with `{"text": ...}` or `DELETE` on `https://api.mem0.ai/v1/memories/<id>/`.
 
+The Hermes mem0 plugin sends every turn for server-side extraction (`infer=True`), including synthetic user-role messages such as background-process notifications and reactions. That is the usual source of event and request junk. mem0 project-level `custom_instructions` steer what extraction keeps, for every client of the project:
+
+```bash
+ids=$(curl -s https://api.mem0.ai/v1/ping/ -H "Authorization: Token $MEM0_API_KEY")
+org=$(echo "$ids" | jq -r .org_id); proj=$(echo "$ids" | jq -r .project_id)
+jq -n --rawfile ci templates/extraction-instructions.md '{custom_instructions: $ci}' |
+  curl -s -X PATCH "https://api.mem0.ai/api/v1/orgs/organizations/$org/projects/$proj/" \
+    -H "Authorization: Token $MEM0_API_KEY" -H 'Content-Type: application/json' -d @-
+```
+
+Cloud extraction is asynchronous. Read the outcome of a test add from `GET /v1/events/`, which lists each add with the memories it produced, instead of listing memories right after the add.
+
 ## File-based memories (Hermes built-in, plain Markdown)
 
 Hermes keeps its built-in memory in `~/.hermes/memories/MEMORY.md` and `USER.md`, one entry per block separated by a line holding `§`. Convert with:
