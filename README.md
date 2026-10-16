@@ -184,6 +184,16 @@ hermes cron resume clear-reflect
 
 Run with `--format json` for machine-readable output, `--format summary` for the detailed terminal text, or `--format discord` for one compact Discord message.
 
+## Clear memory
+
+`clear-memory` reviews an agent's saved memories with the operator. `scripts/triage` flags one-off event logs, recorded requests, time-bound status, near-duplicates, credentials and dangling references. The agent checks each checkable claim against current sources, asks the operator to keep, delete or rewrite it, and applies the answer through the memory provider's own tools.
+
+```bash
+skills/clear-memory/scripts/triage scan export.jsonl --format summary
+```
+
+It works with any provider that can export records with an id and text: mem0, file-based memories such as Hermes `MEMORY.md`, or Claude Code's Markdown memory. Decisions go to a local ledger, so a review can stop and resume. See [`skills/clear-memory/SKILL.md`](skills/clear-memory/SKILL.md).
+
 ## Status
 
 | | Piece | State |
@@ -196,6 +206,7 @@ Run with `--format json` for machine-readable output, `--format summary` for the
 || 3 | `clear-stats`: outcomes, claim vs proof, rework, corrections, and cost across Claude Code, Codex, Hermes, and GitHub | in progress; outcome collector merged |
 | 4 | `clear-reflect`: mine transcripts for repeated corrections and repeated tool-call chains, and propose principles, guards, or scripts | merged |
 | 5 | Local dashboard: read-only view of run records | in progress; telemetry now reads from the harness session log when available |
+| 6 | `clear-memory`: interactive, provider-agnostic review of saved agent memories | merged |
 
 ## Develop
 

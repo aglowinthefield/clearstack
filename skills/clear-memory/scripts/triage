@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""Triage saved agent memories for an interactive review.
+
+Provider-agnostic: input is any JSON array, JSON object with a `results` or
+`memories` list, or JSONL of memory records. Each record needs an id and a
+text field (`memory`, `text` or `content`); `created_at` or `updated_at` is
+optional. File-based memories (one entry per `§`-separated block) convert
+with the `from-markdown` subcommand.
+
+Rule ids match the numbered flags in SKILL.md:
+  1 event       a one-off event log, not a durable fact
+  2 request     records what the user asked, not what is true
+  3 time-bound  status that expires (currently, considering, dated counts)
+  4 duplicate   near-duplicate of a newer memory
+  5 secret      looks like a credential
+  6 vague       depends on context the memory does not carry
+
+Decisions go to an append-only ledger so a review can stop and resume.
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+RULES = {
+    1: ("event", "delete"),
+    2: ("request", "delete"),
+    3: ("time-bound", "verify"),
+    4: ("duplicate", "delete"),
+    5: ("secret", "delete"),
+    6: ("vague", "update"),
+}
+
+EVENT = re.compile(
+    r"background process|\bproc_[0-9a-f]{6,}|exit[ _]code|completed (normally|successfully|with)"
+    r"|\breacted\b|watch pattern|matched an? .{0,20}pattern|\btimed out\b|\bwas removed from the merge queue",
+    re.I,
+)
+REQUEST = re.compile(
+    r"^(the )?user (has )?(asked|requested|asks|is asking|wants to know|inquired|reported that|confirmed)\b"
+    r"|^user (asked|requested) (whether|if|about|for|to)\b",
+    re.I,
+)
+TIME_BOUND = re.compile(
+    r"\b(currently|right now|at the moment|as of|today|tonight|yesterday|this week|is considering"
+    r"|is planning|plans to|is waiting|is working on|has \d+ open|still)\b"
+    r"|\b20\d\d-\d\d-\d\d\b|\bon (january|february|march|april|may|june|july|august|september|october|november|december) \d",
+    re.I,
+)
+SECRET = re.compile(
+    r"(sk|pk|ghp|gho|xox[bp]|AKIA)[-_A-Za-z0-9]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY|password\s*[:=]\s*\S{6,}",
+)
+VAGUE = re.compile(r"\b(item|option|step|point) \(?\d+\)?|\b(that one|this one|the above|the former|the latter)\b", re.I)
+WORD = re.compile(r"[a-z0-9#._/-]+")
+STOP = set("the a an and or of to in on for with is was are be user user's that this it as at by from".split())
+
+
+def ledger_path(arg):
+    if arg:
+        return Path(arg).expanduser()
+    base = os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state"
+    return Path(base) / "clearstack" / "memory-review.jsonl"
+
+
+def text_hash(text):
+    return hashlib.sha256(text.strip().encode()).hexdigest()[:16]
+
+
+def load(source):
+    raw = sys.stdin.read() if source in (None, "-") else Path(source).expanduser().read_text()
+    raw = raw.strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        data = [json.loads(line) for line in raw.splitlines() if line.strip()]
+    if isinstance(data, dict):
+        data = data.get("results") or data.get("memories") or data.get("items") or []
+    out = []
+    for rec in data:
+        if isinstance(rec, str):
+            rec = {"text": rec}
+        text = rec.get("memory") or rec.get("text") or rec.get("content") or ""
+        if not text.strip():
+            continue
+        out.append({
+            "id": str(rec.get("id") or text_hash(text)),
+            "text": text.strip(),
+            "created_at": rec.get("created_at") or rec.get("createdAt") or "",
+            "updated_at": rec.get("updated_at") or rec.get("updatedAt") or "",
+        })
+    return out
+
+
+def read_ledger(path):
+    decided = {}
+    if path.exists():
+        for line in path.read_text().splitlines():
+            if line.strip():
+                entry = json.loads(line)
+                decided[entry["id"]] = entry
+    return decided
+
+
+def tokens(text):
+    return {w for w in WORD.findall(text.lower()) if w not in STOP and len(w) > 2}
+
+
+def stamp(rec):
+    return rec["updated_at"] or rec["created_at"] or ""
+
+
+def flag(memories):
+    toks = [tokens(m["text"]) for m in memories]
+    dup_of = {}
+    order = sorted(range(len(memories)), key=lambda i: stamp(memories[i]), reverse=True)
+    for pos, i in enumerate(order):
+        if i in dup_of or len(toks[i]) < 4:
+            continue
+        for j in order[pos + 1:]:
+            if j in dup_of or len(toks[j]) < 4:
+                continue
+            union = toks[i] | toks[j]
+            if union and len(toks[i] & toks[j]) / len(union) >= 0.75:
+                dup_of[j] = memories[i]["id"]
+    flagged = []
+    for idx, mem in enumerate(memories):
+        text = mem["text"]
+        rules = []
+        if EVENT.search(text):
+            rules.append(1)
+        if REQUEST.search(text):
+            rules.append(2)
+        if TIME_BOUND.search(text):
+            rules.append(3)
+        if idx in dup_of:
+            rules.append(4)
+        if SECRET.search(text):
+            rules.append(5)
+        if VAGUE.search(text):
+            rules.append(6)
+        entry = dict(mem)
+        entry["rules"] = rules
+        entry["flags"] = [RULES[r][0] for r in rules]
+        entry["suggest"] = suggest(rules)
+        if idx in dup_of:
+            entry["duplicate_of"] = dup_of[idx]
+        flagged.append(entry)
+    return flagged
+
+
+def suggest(rules):
+    if not rules:
+        return "keep"
+    if any(r in (1, 2, 4, 5) for r in rules):
+        return "delete"
+    return RULES[min(rules)][1]
+
+
+def cmd_scan(args):
+    path = ledger_path(args.ledger)
+    decided = read_ledger(path)
+    memories = flag(load(args.source))
+    queue, skipped = [], 0
+    for mem in memories:
+        prior = decided.get(mem["id"])
+        fresh = prior and prior["action"] != "skip" and prior.get("text_hash") in (None, text_hash(mem["text"]))
+        if fresh:
+            skipped += 1
+            continue
+        if mem["rules"] or args.all:
+            queue.append(mem)
+    rank = {"delete": 0, "verify": 1, "update": 2, "keep": 3}
+    queue.sort(key=lambda m: (rank[m["suggest"]], min(m["rules"] or [9]), stamp(m)))
+    if args.limit:
+        queue = queue[: args.limit]
+    counts = {}
+    for mem in memories:
+        for name in mem["flags"] or ["unflagged"]:
+            counts[name] = counts.get(name, 0) + 1
+    report = {
+        "total": len(memories),
+        "already_reviewed": skipped,
+        "queued": len(queue),
+        "flag_counts": counts,
+        "ledger": str(path),
+        "queue": queue,
+    }
+    if args.format == "summary":
+        print(f"{report['total']} memories, {skipped} already reviewed, {len(queue)} queued")
+        for name, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+            print(f"  {name}: {n}")
+        for mem in queue:
+            print(f"- [{mem['suggest']}] {','.join(mem['flags']) or 'unflagged'} {mem['id']}: {mem['text'][:120]}")
+    else:
+        json.dump(report, sys.stdout, indent=2)
+        print()
+    return 0
+
+
+def cmd_decide(args):
+    if args.action == "update" and not args.text:
+        print("decide: update needs --text with the new memory text", file=sys.stderr)
+        return 2
+    path = ledger_path(args.ledger)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "id": args.id,
+        "action": args.action,
+    }
+    current = args.text if args.action == "update" else args.old
+    if current:
+        entry["text_hash"] = text_hash(current)
+    if args.text:
+        entry["text"] = args.text
+    if args.note:
+        entry["note"] = args.note
+    with path.open("a") as fh:
+        fh.write(json.dumps(entry) + "\n")
+    print(json.dumps(entry))
+    return 0
+
+
+def cmd_from_markdown(args):
+    raw = Path(args.file).expanduser().read_text()
+    blocks = [b.strip() for b in re.split(r"^\s*§\s*$", raw, flags=re.M) if b.strip()]
+    json.dump([{"id": text_hash(b), "text": b} for b in blocks], sys.stdout, indent=2)
+    print()
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    scan = sub.add_parser("scan", help="flag memories and print the review queue")
+    scan.add_argument("source", nargs="?", default="-", help="JSON/JSONL export, or - for stdin")
+    scan.add_argument("--ledger")
+    scan.add_argument("--all", action="store_true", help="queue unflagged memories too")
+    scan.add_argument("--limit", type=int, default=0)
+    scan.add_argument("--format", choices=["json", "summary"], default="json")
+    scan.set_defaults(func=cmd_scan)
+    decide = sub.add_parser("decide", help="record one operator decision in the ledger")
+    decide.add_argument("id")
+    decide.add_argument("action", choices=["keep", "update", "delete", "skip"])
+    decide.add_argument("--text", help="new text for update")
+    decide.add_argument("--old", help="current text, so a later edit re-queues a kept memory")
+    decide.add_argument("--note")
+    decide.add_argument("--ledger")
+    decide.set_defaults(func=cmd_decide)
+    md = sub.add_parser("from-markdown", help="convert a §-separated memory file to JSON")
+    md.add_argument("file")
+    md.set_defaults(func=cmd_from_markdown)
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
