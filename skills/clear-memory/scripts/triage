@@ -48,7 +48,7 @@ REQUEST = re.compile(
 )
 TIME_BOUND = re.compile(
     r"\b(currently|right now|at the moment|as of|today|tonight|yesterday|this week|is considering"
-    r"|is planning|plans to|is waiting|is working on|has \d+ open|still)\b"
+    r"|is planning|plans to|is waiting|is working on|has \d+ open)\b"
     r"|\b20\d\d-\d\d-\d\d\b|\bon (january|february|march|april|may|june|july|august|september|october|november|december) \d",
     re.I,
 )

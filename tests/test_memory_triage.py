@@ -15,6 +15,7 @@ MEMORIES = [
     {"id": "new-dup", "memory": "Deploys to staging run from the release workflow on main pushes only", "created_at": "2026-10-05T00:00:00Z"},
     {"id": "secret", "memory": "Token is ghp_abcdefghijklmnopqrstuv for the bot", "created_at": "2026-10-06T00:00:00Z"},
     {"id": "vague", "memory": "User decided to proceed with option 2", "created_at": "2026-10-07T00:00:00Z"},
+    {"id": "still-rule", "memory": "No notifications for failing checks while a PR is still a draft.", "created_at": "2026-10-09T00:00:00Z"},
     {"id": "short-fact", "memory": "User's channel ID is 1557049674131570759", "created_at": "2026-10-08T00:00:00Z"},
 ]
 
@@ -44,7 +45,7 @@ class TriageTest(unittest.TestCase):
         self.assertEqual(queue["old-dup"]["duplicate_of"], "new-dup")
         self.assertIn(5, queue["secret"]["rules"])
         self.assertEqual(queue["vague"]["rules"], [6])
-        for kept in ("durable", "new-dup", "short-fact"):
+        for kept in ("durable", "new-dup", "short-fact", "still-rule"):
             self.assertNotIn(kept, queue)
 
     def test_suggestions_and_order_put_deletions_first(self):
