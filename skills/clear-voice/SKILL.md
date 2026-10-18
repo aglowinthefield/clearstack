@@ -84,6 +84,8 @@ scripts/voice-check FILE        # or pipe text on stdin
 
 It flags the rules a script can catch (stock vocabulary, em dashes, chatbot phrases, filler, paragraphs over three sentences) with line numbers and exits 1 on any hit. It cannot judge rules 1 to 4 or 7, so reread for those.
 
+`scripts/pr-body-guard` runs the same check as a harness hook on `gh pr create`, `gh pr edit`, `gh pr comment`, and `gh issue comment`, and adds the shell-safety checks. Wire it so a PR body cannot skip the check. See the README for the hook snippets.
+
 ## Persona and voice
 
 If the operator asked for a persona or tone, keep it. Clear voice governs content and density, not personality. A playful reply still leads with the answer and still skips filler.

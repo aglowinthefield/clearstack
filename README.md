@@ -70,6 +70,18 @@ skills/clear-voice/scripts/voice-check PR_BODY.md
 
 The test suite runs it over every Markdown file in this repo.
 
+`skills/clear-voice/scripts/pr-body-guard` enforces the mechanical part before text reaches GitHub. It is a `PreToolUse` hook for `gh pr create`, `gh pr edit`, `gh pr comment`, and `gh issue comment`, and it blocks:
+
+- a body it cannot read: `--fill`, `--template`, stdin, or a missing file,
+- a body the shell would rewrite: backticks or `$` in `--body` or an unquoted heredoc,
+- shell syntax that leaked into the text,
+- any `voice-check` hit,
+- a comment that uses `--body` instead of `--body-file`.
+
+Exit code 2 blocks, and the reason goes to stdout as JSON and to stderr.
+
+Wire it as a `PreToolUse` hook on the Bash tool in Claude Code (`~/.claude/settings.json`) or Codex (`~/.codex/hooks.json`), or as a `pre_tool_call` hook on the terminal tool in Hermes. The command is `python3 /path/to/skills/clear-voice/scripts/pr-body-guard`.
+
 ## Clear CI
 
 `clear-ci` replaces `gh pr checks --watch` and `gh run watch` after opening or updating a PR. Those block until every job in every workflow finishes; `clear-ci`'s `scripts/watch` polls job-level status instead and prints each real failure the moment it happens, so the agent can start fixing before the rest of the stack completes. A job GitHub marks `skipped` because a `needs:` dependency already failed is not reported, so one real break downstream of a chain does not read as several.
