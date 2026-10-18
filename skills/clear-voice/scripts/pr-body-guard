@@ -28,7 +28,7 @@ WRAPPERS = {"command", "builtin", "exec", "nohup", "time", "env", "sudo", "doas"
 FILL = {"--fill", "--fill-first", "--fill-verbose", "-f", "--template", "-T"}
 ASSIGN = re.compile(r"[A-Za-z_]\w*=")
 EXPANDS = re.compile(r"`|\$[({A-Za-z_]")
-LEAKED = re.compile(r"\$\(\s*cat\s*<<|^EOF$", re.M)
+LEAKED = re.compile(r"^(\s*\$\(\s*cat\s*<<|EOF$)", re.M)
 CAT_HEREDOC = re.compile(r"\$\(\s*cat\s*<<.*\)", re.S)
 SUBSTITUTION = re.compile(r"\$\(([^()]*)\)")
 HEREDOC = re.compile(r"(<<-?\s*(['\"]?)(\w+)\2[^\n]*)\n(.*?)^[ \t]*\3[ \t]*$", re.S | re.M)

@@ -103,6 +103,10 @@ class PrBodyGuardTest(unittest.TestCase):
         (self.dir / "leak.md").write_text("$(cat <<EOF\nDone.\nEOF\n")
         self.assert_blocked("gh pr edit 12 --body-file leak.md", "shell syntax leaked")
 
+    def test_prose_that_mentions_leaked_syntax_passes(self):
+        (self.dir / "doc.md").write_text("The guard blocks `$(cat <<` and a bare `EOF` line.\n")
+        self.assert_allowed("gh pr edit 12 --body-file doc.md")
+
     def test_comments_must_use_a_body_file(self):
         for command in ("gh pr comment 12 --body 'Fixes it.'", "gh issue comment 9 -b 'Fixes it.'"):
             with self.subTest(command):
