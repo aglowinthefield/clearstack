@@ -56,6 +56,7 @@ class PrBodyGuardTest(unittest.TestCase):
             f"sh -c \"{PR} --body 'Fixes the parser.'\"",
             f"url=$({PR} --body 'Fixes the parser.')",
             "gh issue comment 9 --body-file clean.md",
+            "gh pr comment 12 --body 'Fixes the parser.'",
         ):
             with self.subTest(command):
                 self.assert_allowed(command)
@@ -74,6 +75,7 @@ class PrBodyGuardTest(unittest.TestCase):
             f"eval '{PR} --body \"We leverage a cache.\"'",
             f"echo \"$({PR} --body 'We leverage a cache.')\"",
             "gh pr comment 12 --body-file dirty.md",
+            "gh issue comment 9 -b 'We leverage a cache.'",
         ):
             with self.subTest(command):
                 self.assert_blocked(command, "body line 1: rule 5")
@@ -106,11 +108,6 @@ class PrBodyGuardTest(unittest.TestCase):
     def test_prose_that_mentions_leaked_syntax_passes(self):
         (self.dir / "doc.md").write_text("The guard blocks `$(cat <<` and a bare `EOF` line.\n")
         self.assert_allowed("gh pr edit 12 --body-file doc.md")
-
-    def test_comments_must_use_a_body_file(self):
-        for command in ("gh pr comment 12 --body 'Fixes it.'", "gh issue comment 9 -b 'Fixes it.'"):
-            with self.subTest(command):
-                self.assert_blocked(command, "comment body must come from --body-file")
 
     def test_old_humanized_marker_does_not_bypass(self):
         self.assert_blocked(f"HERMES_HUMANIZED=1 {PR} --body 'We leverage it.'", "rule 5")

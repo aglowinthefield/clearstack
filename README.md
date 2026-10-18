@@ -75,8 +75,7 @@ The test suite runs it over every Markdown file in this repo.
 - a body it cannot read: `--fill`, `--template`, stdin, or a missing file,
 - a body the shell would rewrite: backticks or `$` in `--body` or an unquoted heredoc,
 - shell syntax that leaked into the text,
-- any `voice-check` hit,
-- a comment that uses `--body` instead of `--body-file`.
+- any `voice-check` hit.
 
 Exit code 2 blocks, and the reason goes to stdout as JSON and to stderr.
 

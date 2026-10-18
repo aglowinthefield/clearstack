@@ -10,8 +10,7 @@ It blocks when:
   - the body cannot be read: --fill, --template, stdin without a heredoc, a missing file;
   - the shell may rewrite the body: backticks or `$` expansions in --body or an unquoted heredoc;
   - shell syntax leaked into the text: `$(cat <<` or a bare EOF line;
-  - the body breaks a rule that `voice-check` can see;
-  - a comment uses --body instead of --body-file.
+  - the body breaks a rule that `voice-check` can see.
 """
 
 import json
@@ -62,12 +61,11 @@ def lint(body):
 
 
 def gh_problems(args, docs, cwd):
-    comment = args[:2] in (["pr", "comment"], ["issue", "comment"])
-    if not comment and args[:2] not in (["pr", "create"], ["pr", "edit"]):
+    if args[:2] not in (["pr", "create"], ["pr", "edit"], ["pr", "comment"], ["issue", "comment"]):
         return []
     rest = args[2:]
     problems, bodies, use_docs = [], [], False
-    if not comment and FILL & {a.split("=", 1)[0] for a in rest}:
+    if args[1] == "create" and FILL & {a.split("=", 1)[0] for a in rest}:
         problems.append("--fill and --template build the body where this check cannot read it")
     for i, arg in enumerate(rest):
         flag, eq, value = arg.partition("=")
@@ -86,8 +84,6 @@ def gh_problems(args, docs, cwd):
                 bodies.append((path if path.is_absolute() else Path(cwd) / path).read_text(encoding="utf-8"))
             except OSError:
                 problems.append(f"cannot read {value}; create the file in an earlier command")
-        elif comment:
-            problems.append("a comment body must come from --body-file, not --body")
         elif CAT_HEREDOC.fullmatch(value):
             use_docs = True
         elif EXPANDS.search(value):
