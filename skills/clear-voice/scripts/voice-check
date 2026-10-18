@@ -30,9 +30,18 @@ CHECKS = [
 COMPILED = [(rule, re.compile(p, re.IGNORECASE), msg) for rule, p, msg in CHECKS]
 INLINE_CODE = re.compile(r"`[^`]*`")
 
-# Rule 33: a prose paragraph holds at most this many sentences. List items are
-# exempt: a list is the fix the rule asks for.
+# Rule 33: a paragraph or list item holds at most this many sentences. A list
+# item is one idea too, so it gets the same limit as a paragraph.
 MAX_SENTENCES = 3
+MAX_ITEM_WORDS = 60  # rule 11: one idea per bullet
+MAX_LEAD_WORDS = 45  # rule 1: the first block states the answer, briefly
+MAX_LEAD_SENTENCES = 2
+MAX_PROSE_WORDS = 350  # rule 2: proof goes in <details>, not the lead text
+MAX_LINE_CHARS = 400  # rule 11: a longer line is several ideas
+# rule 1: a lead that opens with context, not the answer
+LEAD_CONTEXT = re.compile(r"^\s*(why|context|background|motivation|the problem|problem)\b[^:\n]{0,40}:", re.IGNORECASE)
+DETAILS_OPEN = re.compile(r"<details\b", re.IGNORECASE)
+DETAILS_CLOSE = re.compile(r"</details>", re.IGNORECASE)
 BLOCK_START = re.compile(r"\s*([-*+]|\d+[.)])\s")  # a list item starts its own block
 NOT_PROSE = re.compile(r"\s*(#|\||<!--)")  # headings, table rows, HTML comments
 LEAD_LABEL = re.compile(r"^\s*\*\*[^*]+\*\*")  # "**Changes.** ..." opens with a label, not a sentence
@@ -49,12 +58,29 @@ def long_paragraphs(name, prose_lines):
     """prose_lines: (line number, text) pairs, with None marking a block break."""
     hits = []
     block, start = [], None
+    lead_done = False
 
     def flush():
-        if block and not BLOCK_START.match(block[0]):
-            count = sentence_count(" ".join(block))
-            if count > MAX_SENTENCES:
-                hits.append(f"{name}:{start}: rule 33: paragraph has {count} sentences: split it or make a list")
+        nonlocal lead_done
+        if block:
+            text = " ".join(block)
+            count = sentence_count(text)
+            words = len(text.split())
+            if BLOCK_START.match(block[0]):
+                if count > MAX_SENTENCES:
+                    hits.append(f"{name}:{start}: rule 33: list item has {count} sentences: one idea per bullet")
+                if words > MAX_ITEM_WORDS:
+                    hits.append(f"{name}:{start}: rule 11: list item has {words} words: split it into bullets")
+            else:
+                if count > MAX_SENTENCES:
+                    hits.append(f"{name}:{start}: rule 33: paragraph has {count} sentences: split it or make a list")
+                # A label such as "Summary" is not the lead; the block after it is.
+                if not lead_done and (count or words > 4):
+                    lead_done = True
+                    if LEAD_CONTEXT.match(text):
+                        hits.append(f"{name}:{start}: rule 1: context before the answer: state the result first")
+                    elif count > MAX_LEAD_SENTENCES or words > MAX_LEAD_WORDS:
+                        hits.append(f"{name}:{start}: rule 1: the lead is {count} sentences and {words} words: state the answer in one or two")
         block.clear()
 
     for entry in prose_lines:
@@ -74,7 +100,8 @@ def long_paragraphs(name, prose_lines):
 def check(name, text):
     hits = []
     prose_lines = []
-    in_fence = False
+    in_fence = in_details = False
+    outside_details_words = 0
     for number, line in enumerate(text.splitlines(), 1):
         if line.lstrip().startswith("```"):
             in_fence = not in_fence
@@ -82,6 +109,14 @@ def check(name, text):
             continue
         if in_fence:
             continue
+        if len(line) > MAX_LINE_CHARS:
+            hits.append(f"{name}:{number}: rule 11: line is {len(line)} chars: split it into sentences or bullets")
+        if DETAILS_OPEN.search(line):
+            in_details = True
+        if not in_details:
+            outside_details_words += len(line.split())
+        if DETAILS_CLOSE.search(line):
+            in_details = False
         if not line.strip() or NOT_PROSE.match(line):
             prose_lines.append(None)
         else:
@@ -90,6 +125,8 @@ def check(name, text):
         for rule, pattern, msg in COMPILED:
             for match in pattern.finditer(prose):
                 hits.append(f"{name}:{number}: rule {rule}: {msg} ({match.group(0)!r})")
+    if outside_details_words > MAX_PROSE_WORDS:
+        hits.append(f"{name}: rule 2: {outside_details_words} words outside <details>: cut, or move proof into a <details> block")
     return hits + long_paragraphs(name, prose_lines)
 
 
