@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""Pre-tool hook: stop a malformed PR body or comment before `gh` posts it.
+
+Reads hook JSON on stdin (`tool_input.command`, optional `cwd`) and exits 2 to block,
+with the reason on stdout as JSON (Hermes) and on stderr (Claude Code, Codex).
+
+It watches `gh pr create`, `gh pr edit`, `gh pr comment`, and `gh issue comment`,
+including inside `sh -c`, `eval`, `$(...)`, `cd x &&`, and `env`/`sudo`-style wrappers.
+It blocks when:
+  - the body cannot be read: --fill, --template, stdin without a heredoc, a missing file;
+  - the shell may rewrite the body: backticks or `$` expansions in --body or an unquoted heredoc;
+  - shell syntax leaked into the text: `$(cat <<` or a bare EOF line;
+  - the body breaks a rule that `voice-check` can see.
+"""
+
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+VOICE_CHECK = Path(__file__).with_name("voice-check")
+SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+WRAPPERS = {"command", "builtin", "exec", "nohup", "time", "env", "sudo", "doas", "nice", "timeout"}
+FILL = {"--fill", "--fill-first", "--fill-verbose", "-f", "--template", "-T"}
+ASSIGN = re.compile(r"[A-Za-z_]\w*=")
+EXPANDS = re.compile(r"`|\$[({A-Za-z_]")
+LEAKED = re.compile(r"^(\s*\$\(\s*cat\s*<<|EOF$)", re.M)
+CAT_HEREDOC = re.compile(r"\$\(\s*cat\s*<<.*\)", re.S)
+SUBSTITUTION = re.compile(r"\$\(([^()]*)\)")
+HEREDOC = re.compile(r"(<<-?\s*(['\"]?)(\w+)\2[^\n]*)\n(.*?)^[ \t]*\3[ \t]*$", re.S | re.M)
+BODY_FLAGS = ("--body", "-b", "--body-file", "-F")
+
+
+def split_heredocs(cmd):
+    """Return the command without heredoc bodies, and the bodies as (quoted, text)."""
+    docs = []
+
+    def take(m):
+        docs.append((bool(m.group(2)), m.group(4)))
+        return m.group(1)
+
+    return HEREDOC.sub(take, cmd), docs
+
+
+def gh_args(seg):
+    """The arguments of a `gh` call at the start of the segment, or None."""
+    i = 0
+    while i < len(seg) and ASSIGN.match(seg[i]):
+        i += 1
+    if i < len(seg) and os.path.basename(seg[i]) in WRAPPERS:
+        i = next((j for j in range(i + 1, len(seg)) if os.path.basename(seg[j]) == "gh"), len(seg))
+    return seg[i + 1 :] if i < len(seg) and os.path.basename(seg[i]) == "gh" else None
+
+
+def lint(body):
+    result = subprocess.run([sys.executable, str(VOICE_CHECK)], input=body, capture_output=True, text=True)
+    return [line.replace("<stdin>:", "body line ", 1) for line in result.stdout.splitlines()]
+
+
+def gh_problems(args, docs, cwd):
+    if args[:2] not in (["pr", "create"], ["pr", "edit"], ["pr", "comment"], ["issue", "comment"]):
+        return []
+    rest = args[2:]
+    problems, bodies, use_docs = [], [], False
+    if args[1] == "create" and FILL & {a.split("=", 1)[0] for a in rest}:
+        problems.append("--fill and --template build the body where this check cannot read it")
+    for i, arg in enumerate(rest):
+        flag, eq, value = arg.partition("=")
+        if flag not in BODY_FLAGS:
+            continue
+        if not eq:
+            value = rest[i + 1] if i + 1 < len(rest) else ""
+        if flag in ("--body-file", "-F"):
+            if value == "-":
+                use_docs = True
+                if not docs:
+                    problems.append("--body-file - reads stdin, which this check cannot see; use a heredoc or a file")
+                continue
+            path = Path(os.path.expanduser(value))
+            try:
+                bodies.append((path if path.is_absolute() else Path(cwd) / path).read_text(encoding="utf-8"))
+            except OSError:
+                problems.append(f"cannot read {value}; create the file in an earlier command")
+        elif CAT_HEREDOC.fullmatch(value):
+            use_docs = True
+        elif EXPANDS.search(value):
+            problems.append("the shell may expand backticks or $ in --body")
+        else:
+            bodies.append(value)
+    for quoted, text in docs if use_docs else []:
+        if not quoted and EXPANDS.search(text):
+            problems.append("the shell expands backticks or $ in an unquoted heredoc; quote the delimiter: <<'EOF'")
+        else:
+            bodies.append(text)
+    for body in bodies:
+        if LEAKED.search(body):
+            problems.append("shell syntax leaked into the body ($(cat <<, EOF); post the text from --body-file")
+        problems += lint(body)
+    return problems
+
+
+def check(cmd, cwd, depth=0):
+    """Every problem with the PR bodies and comments the command would post."""
+    cmd, docs = split_heredocs(cmd)
+    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return []  # unbalanced quotes: the shell rejects it too
+    problems, seg = [], []
+    for tok in tokens + [";"]:
+        if not set(tok) <= set(";&|()"):
+            seg.append(tok)
+            continue
+        if seg:
+            exe = os.path.basename(seg[0])
+            if exe == "cd" and len(seg) > 1:
+                cwd = os.path.join(cwd, os.path.expanduser(seg[1]))
+            elif depth < 4 and exe in SHELLS:
+                for j, a in enumerate(seg[1:-1], 1):
+                    if re.fullmatch(r"-[a-z]*c[a-z]*", a):
+                        problems += check(seg[j + 1], cwd, depth + 1)
+                        break
+            elif depth < 4 and exe == "eval":
+                problems += check(" ".join(seg[1:]), cwd, depth + 1)
+            elif (args := gh_args(seg)) is not None:
+                problems += gh_problems(args, docs, cwd)
+            if depth < 4:
+                for t in seg:
+                    for m in SUBSTITUTION.finditer(t):
+                        problems += check(m.group(1), cwd, depth + 1)
+        seg = []
+    return problems
+
+
+def main():
+    try:
+        payload = json.load(sys.stdin)
+        cmd = payload["tool_input"]["command"]
+        if isinstance(cmd, list):
+            cmd = shlex.join(cmd)
+    except (ValueError, KeyError, TypeError):
+        return 0
+    if not isinstance(cmd, str) or "gh" not in cmd:
+        return 0
+    problems = check(cmd, payload.get("cwd") or os.getcwd())
+    if not problems:
+        return 0
+    reason = "This PR text would reach GitHub malformed. Fix each item, then retry:\n  " + "\n  ".join(problems)
+    print(json.dumps({"decision": "block", "reason": reason}))
+    print(reason, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

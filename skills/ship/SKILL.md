@@ -7,6 +7,8 @@ description: Playbook for shipping a PR. Use after opening or updating a pull re
 
 Trigger: a pull request has been opened or updated and needs to reach merge.
 
+When opening the PR, write the body from [`references/pr-body.md`](references/pr-body.md).
+
 ## Principles
 
 - `ship-what-you-verified`
