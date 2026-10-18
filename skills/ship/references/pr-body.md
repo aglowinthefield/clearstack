@@ -40,7 +40,9 @@ One sentence: what this PR does and what a user or operator notices.
 
 <details><summary>Test output</summary>
 
-    paste the output here
+~~~
+paste the output here, inside a fence so it is not read as prose
+~~~
 
 </details>
 
