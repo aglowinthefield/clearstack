@@ -86,6 +86,8 @@ It flags the rules a script can catch (stock vocabulary, em dashes, chatbot phra
 
 `scripts/pr-body-guard` runs the same check as a harness hook on `gh pr create`, `gh pr edit`, `gh pr comment`, and `gh issue comment`, and adds the shell-safety checks. Wire it so a PR body cannot skip the check. See the README for the hook snippets.
 
+For the shape of a PR body (verdict first, where to start, evidence beside each claim), see the [ship PR body template](../ship/references/pr-body.md).
+
 ## Persona and voice
 
 If the operator asked for a persona or tone, keep it. Clear voice governs content and density, not personality. A playful reply still leads with the answer and still skips filler.
