@@ -16,7 +16,7 @@ Each technique below trades a paragraph for something a reader can skip or expan
 - **Evidence beside each claim.** The test name and count, the command and its exit code, or the CI run link, on the same line as the claim it proves.
 - **Collapsed evidence.** Test output, log tails, and screenshots go in `<details>` with a one-line `<summary>`. The claim stays visible and the proof is one click away.
 - **Tables for comparisons.** Before and after, option A against option B, file against reason.
-- **A Mermaid diagram for a flow or state machine.** GitHub renders a ```` ```mermaid ```` fence. Five boxes beat a paragraph when the change is a pipeline.
+- **A Mermaid diagram for a flow or state machine.** GitHub renders a ```` ```mermaid ```` fence. Five boxes beat a paragraph when the change is a pipeline. Quote every label, `A["like this"]`, since parentheses and brackets inside an unquoted label are shape syntax and fail to render.
 - **Checkboxes for open decisions.** `- [ ]` gives the operator something to tick instead of a question buried in prose.
 
 ## Template
