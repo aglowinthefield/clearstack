@@ -4,6 +4,9 @@
 Reads hook JSON on stdin (`tool_input.command`, optional `cwd`) and exits 2 to block,
 with the reason on stdout as JSON (Hermes) and on stderr (Claude Code, Codex).
 
+Repositories can supply .agents/hooks/pr-title.py for title checks.
+See ../references/repository-title-hook.md for the adapter protocol.
+
 It watches `gh pr create`, `gh pr edit`, `gh pr comment`, and `gh issue comment`,
 including inside `sh -c`, `eval`, `$(...)`, `cd x &&`, and `env`/`sudo`-style wrappers.
 It blocks when:
@@ -60,11 +63,41 @@ def lint(body):
     return [line.replace("<stdin>:", "body line ", 1) for line in result.stdout.splitlines()]
 
 
+def title_problems(args, cwd):
+    """Delegate title rules to an opted-in repository, not a global scope list."""
+    if args[:2] not in (["pr", "create"], ["pr", "edit"]):
+        return []
+
+    try:
+        root = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if root.returncode:
+            return []
+        adapter = Path(root.stdout.strip()) / ".agents/hooks/pr-title.py"
+        if not adapter.is_file():
+            return []
+        result = subprocess.run(
+            [sys.executable, str(adapter)],
+            input=json.dumps({"argv": args, "cwd": cwd}),
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode:
+            return [f"repository title hook failed: {result.stderr.strip()}"]
+        problems = json.loads(result.stdout)
+        if not isinstance(problems, list) or not all(isinstance(item, str) for item in problems):
+            raise ValueError("expected a JSON list of block reasons")
+        return problems
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        return [f"cannot run repository title hook: {error}"]
+
+
 def gh_problems(args, docs, cwd):
     if args[:2] not in (["pr", "create"], ["pr", "edit"], ["pr", "comment"], ["issue", "comment"]):
         return []
     rest = args[2:]
-    problems, bodies, use_docs = [], [], False
+    problems, bodies, use_docs = title_problems(args, cwd), [], False
     if args[1] == "create" and FILL & {a.split("=", 1)[0] for a in rest}:
         problems.append("--fill and --template build the body where this check cannot read it")
     for i, arg in enumerate(rest):
@@ -147,7 +180,8 @@ def main():
         return 0
     if not isinstance(cmd, str) or "gh" not in cmd:
         return 0
-    problems = check(cmd, payload.get("cwd") or os.getcwd())
+    cwd = payload["tool_input"].get("workdir") or payload.get("cwd") or os.getcwd()
+    problems = check(cmd, cwd)
     if not problems:
         return 0
     reason = "This PR text would reach GitHub malformed. Fix each item, then retry:\n  " + "\n  ".join(problems)

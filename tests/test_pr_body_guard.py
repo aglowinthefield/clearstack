@@ -112,6 +112,54 @@ class PrBodyGuardTest(unittest.TestCase):
     def test_old_humanized_marker_does_not_bypass(self):
         self.assert_blocked(f"HERMES_HUMANIZED=1 {PR} --body 'We leverage it.'", "rule 5")
 
+    def install_title_adapter(self):
+        subprocess.run(["git", "init", str(self.dir)], check=True, capture_output=True)
+        adapter = self.dir / ".agents/hooks/pr-title.py"
+        adapter.parent.mkdir(parents=True)
+        # Exercise the adapter subprocess protocol without coupling the guard
+        # tests to any one repository's title vocabulary.
+        adapter.write_text(
+            "import json, sys\n"
+            "payload = json.load(sys.stdin)\n"
+            "assert payload['argv'][:2] in (['pr', 'create'], ['pr', 'edit'])\n"
+            "print(json.dumps(['repo title rejected'] if '--title=bad' in payload['argv'] else []))\n"
+        )
+        return adapter
+
+    def test_repository_adapter_checks_create_and_edit_through_shell_wrappers(self):
+        self.install_title_adapter()
+        for command in (
+            "gh pr create --title=bad",
+            "gh pr edit 12 --title=bad",
+            "env X=1 gh pr create --title=bad",
+            "bash -lc 'gh pr edit 12 --title=bad'",
+            "echo $(gh pr create --title=bad)",
+            f"cd {self.dir} && gh pr create --title=bad",
+        ):
+            with self.subTest(command):
+                self.assert_blocked(command, "repo title rejected")
+        self.assert_allowed("gh pr create --title=good --body-file clean.md")
+        self.assert_allowed("gh pr edit 12 --body-file clean.md")
+        self.assert_allowed("echo 'gh pr create --title=bad'")
+        self.assert_allowed("gh pr comment 12 --body-file clean.md")
+
+    def test_repository_adapter_discovery_uses_tool_workdir_and_subdirectories(self):
+        self.install_title_adapter()
+        nested = self.dir / "nested"
+        nested.mkdir()
+        payload = {"cwd": "/", "tool_input": {
+            "command": "gh pr create --title=bad", "workdir": str(nested),
+        }}
+        result = subprocess.run([str(GUARD)], input=json.dumps(payload), capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("repo title rejected", result.stderr)
+
+    def test_broken_opted_in_adapter_blocks_publication(self):
+        adapter = self.install_title_adapter()
+        for source in ("raise RuntimeError('broken adapter')", "print('not json')", "print('{}')"):
+            adapter.write_text(source)
+            self.assert_blocked("gh pr create --title=good", "title hook")
+
     def test_unparseable_input_is_not_blocked(self):
         for stdin in ("", "not json", json.dumps({"tool_input": {}}), json.dumps({"tool_input": {"command": "gh 'x"}})):
             with self.subTest(stdin):
