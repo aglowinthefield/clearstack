@@ -138,15 +138,26 @@ Commits made during a run carry a `Clear-Run: <id>` trailer, which links GitHub 
 
 ## Local dashboard
 
-Start the read-only run dashboard with:
+On macOS, install the background service and Spotlight launcher once:
 
-```bash
+```sh
+python3 -m clearstack.macos
+```
+
+Run this from the ClearStack checkout. Open **ClearStack** from Spotlight or Applications to see [usage and bills](http://127.0.0.1:8766/tokens). The local service starts at login and keeps running when the browser closes.
+
+To run the dashboard in a terminal instead:
+
+```sh
 python3 -m clearstack.dashboard
 ```
 
-It binds to `127.0.0.1:8765` by default and reads `~/.local/state/clearstack/runs.jsonl` (or `$XDG_STATE_HOME/clearstack/runs.jsonl`). It makes no network requests and does not change the log.
+The terminal command binds to `127.0.0.1:8765` by default. It reads `~/.local/state/clearstack/runs.jsonl` (or `$XDG_STATE_HOME/clearstack/runs.jsonl`) without changing the log.
 
 Pass `--host <address>` to bind elsewhere, for example a Tailscale address to reach it from another machine on your tailnet. The dashboard has no authentication, so only do this on a network you trust.
+
+<details>
+<summary>Usage, billing, and data coverage</summary>
 
 This first version shows run status, duration, decision notes, and claims. `scripts/record end` reads token, cache, tool-call totals, and a per-tool-name call breakdown from the harness's own local session log when a matching session id is set in the environment, and stores them on the run record. The session logs are:
 
@@ -156,9 +167,19 @@ This first version shows run status, duration, decision notes, and claims. `scri
 
 A run with no matching session log shows "not collected" rather than zero. The table and summary bar show per-run and total cost once any run in the log has telemetry. A donut chart breaks tool calls down by name, both per run and aggregated across every run with telemetry.
 
-The `/tokens` route shows a token-spend analytics view computed from `~/.hermes/state.db` on each request. It covers the last 14 days with headline totals, fresh input by model, a daily stacked bar chart, session-size buckets, surface breakdown, top sessions, tool-call volume, and fixed per-turn overhead from the system prompts table. A missing or unreadable state.db renders an empty-state note instead of a traceback.
+The `/tokens` page defaults to the current calendar month and lets you select another month. It reads the default Hermes database and every named profile database without modifying them. Charts show cumulative usage for sessions started in that month, in local time; Hermes does not provide enough data to split a session across month boundaries.
+
+The ticket table joins Kanban attempts to their worker sessions by profile and session ID, including same-profile child sessions. Repeated receipts count a session once; missing usage and sessions shared across tickets stay unassigned. Ticket status describes the current card, and attempt statuses describe individual runs.
+
+Click a table heading to sort; unknown values stay last in either direction.
+
+**Your monthly bills** keeps Codex, Claude A, Claude B, and Kimi separate. Enter subscription payments, extras or credit purchases, and API charges in USD; leave unknown amounts blank and enter zero only for a confirmed absence of charges. Top-ups count when purchased, so do not enter the same charge in two columns.
+
+The Save button writes only ClearStack's `bills.json` beside `runs.jsonl`, preserving other months. A monthly budget compares against entered charges and does not stop agents. Session estimates remain separate from these bills; billing accounts, remaining provider quotas, other machines, and activity outside Hermes are not inferred.
 
 The dashboard should also preserve the user's original request and pending decisions through long agent output, so the current goal does not get buried. This first version reads run records only and does not capture conversation text.
+
+</details>
 
 ## Clear stats
 

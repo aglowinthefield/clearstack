@@ -1,4 +1,4 @@
-"""Read-only local dashboard for ClearStack run records."""
+"""Local dashboard for run records, usage, and user-entered bills."""
 
 import argparse
 from datetime import datetime, timezone
@@ -10,7 +10,8 @@ from pathlib import Path
 import time
 from urllib.parse import parse_qs, urlsplit
 
-from clearstack.token_view import render_tokens_page
+from clearstack.token_view import month_window, render_tokens_page
+from clearstack.billing import save_bills
 from clearstack.theme import theme_head, theme_picker
 
 
@@ -638,7 +639,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._serve_events()
             return
         if request.path == "/tokens":
-            self._serve_tokens()
+            self._serve_tokens(parse_qs(request.query).get("month", [None])[0])
             return
         if request.path != "/":
             self.send_error(404)
@@ -661,8 +662,52 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _serve_tokens(self):
-        page = render_tokens_page(bind_host=self.bind_host)
+    def do_POST(self):
+        if self.path != "/api/bills":
+            self.send_error(404)
+            return
+        host = self.headers.get("Host", "")
+        origin = self.headers.get("Origin")
+        if (urlsplit("http://" + host).hostname not in ("127.0.0.1", "localhost", "::1")
+                or (origin is not None and origin != "http://" + host)):
+            self._json_response(403, {"error": "Save bills from the local ClearStack page."})
+            return
+        if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+            self._json_response(415, {"error": "Send bills as JSON."})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 16384:
+                raise ValueError("Bills request is too large or empty.")
+            payload = json.loads(self.rfile.read(length))
+            if not isinstance(payload, dict) or not isinstance(payload.get("month"), str):
+                raise ValueError("Choose a month in YYYY-MM format.")
+            month, _ = month_window(payload["month"])
+            record = save_bills(month, payload)
+        except (ValueError, TypeError, UnicodeError) as error:
+            self._json_response(400, {"error": str(error)})
+            return
+        except OSError:
+            self._json_response(500, {"error": "Cannot save bills to ClearStack's local state directory."})
+            return
+        self._json_response(200, record)
+
+    def _json_response(self, status, value):
+        body = json.dumps(value).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_tokens(self, month=None):
+        try:
+            page = render_tokens_page(bind_host=self.bind_host, month=month)
+        except (ValueError, OverflowError):
+            self.send_error(400, "Choose a valid month in YYYY-MM format.")
+            return
         body = page.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")

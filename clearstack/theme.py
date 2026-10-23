@@ -42,7 +42,6 @@ html[data-clearstack-theme="dusk"] {
 <script>
 (function() {
   var storageKey = "clearstack.theme";
-  var budgetKey = "clearstack.spend-guardrail.14d";
   var tokens = ["sky-top", "sky-mid", "sky-low", "sky-horizon", "surface", "surface-strong", "ink", "muted", "aqua", "aqua-deep", "mint", "coral", "amber"];
   var defaults = {};
   var html = document.documentElement;
@@ -85,28 +84,7 @@ html[data-clearstack-theme="dusk"] {
     document.querySelectorAll("[data-clearstack-theme-select]").forEach(function(select) { select.value = current.theme || "midnight"; });
     palette = current.theme === "custom" ? (current.custom || {}) : snapshot();
     document.querySelectorAll("[data-theme-token]").forEach(function(input) { input.value = hex(palette[input.dataset.themeToken]); });
-    syncBudget();
   }
-  function syncBudget() {
-    var guardrail = document.querySelector("[data-billing-spend]");
-    if (!guardrail) return;
-    var spend = Number(guardrail.dataset.billingSpend || 0);
-    var input = document.getElementById("clearstack-spend-cap");
-    var output = guardrail.querySelector("[data-spend-guardrail]");
-    var cap = Number(localStorage.getItem(budgetKey));
-    if (input && document.activeElement !== input) input.value = cap > 0 ? cap : "";
-    if (!output) return;
-    if (!(cap > 0)) { output.textContent = "Set a cap to compare against recorded metered cost."; return; }
-    var percent = Math.round(spend / cap * 100);
-    output.textContent = "$" + spend.toFixed(2) + " of $" + cap.toFixed(2) + " used (" + percent + "%).";
-  }
-  document.addEventListener("input", function(event) {
-    if (event.target.id !== "clearstack-spend-cap") return;
-    var cap = Number(event.target.value);
-    if (cap > 0) localStorage.setItem(budgetKey, String(cap));
-    else localStorage.removeItem(budgetKey);
-    syncBudget();
-  });
   document.addEventListener("DOMContentLoaded", sync);
 })();
 </script>"""
