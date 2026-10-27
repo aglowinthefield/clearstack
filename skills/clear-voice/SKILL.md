@@ -18,9 +18,9 @@ Rule numbers are stable ids. `scripts/voice-check` cites them, and a removed rul
 ### Length
 
 1. **Lead with the answer.** The first sentence is the result, the decision, or the blocker. Context comes after, if the reader needs it.
-2. **Match length to the ask.** A one-line question gets a one-line answer. A finished task gets what changed, what was verified, and what is left.
-3. **Say it once.** No restating the request, no closing summary of what you just said, no narrating tool calls the reader can see.
-4. **Cut what the reader cannot act on.** If a sentence gives no fact, instruction, number, or decision, delete it.
+2. **Match length to the ask.** A one-line question gets a one-line answer. A finished task gets what changed, what was verified, and what is left. Budgets: a final report is 2 to 4 sentences, under 80 words, unless the reader asked for detail. A task card or spec states its goal and acceptance criteria in under 150 words.
+3. **Say it once.** No restating the request, no closing summary of what you just said, no narrating tool calls the reader can see. Text that repeats across documents, such as a rules block pasted into several cards, lives in one place. Each document links to it and keeps only what is specific to itself.
+4. **Cut what the reader cannot act on.** If a sentence gives no fact, instruction, number, or decision, delete it. Provenance and history (split dates, "ported from", merged-PR trivia) rarely change what the reader does. Drop them, or keep one footer line.
 
 ### Words
 
@@ -33,7 +33,7 @@ Rule numbers are stable ids. `scripts/voice-check` cites them, and a removed rul
 ### Sentences
 
 10. **Whole sentences.** Keep articles and verbs. Spell out arrows and abbreviations. Short is the goal, but the reader should never have to decode.
-11. **One idea per sentence.** If the reader would backtrack, split it.
+11. **One idea per sentence.** If the reader would backtrack, split it. A list item is one sentence of about 25 words or fewer. Split anything longer into more items.
 12. **Active voice.** Name the actor: "the parser rejects the date", not "the date is rejected".
 13. **Hedge once, and only when unsure.** "may" or "I have not verified this", not `could potentially possibly`.
 14. **State the point directly.** No `not just X, but Y`, no forced groups of three, no rhetorical questions.
@@ -73,6 +73,7 @@ These rules keep text readable in a terminal, where a dense block wraps into a w
 
 33. **Short paragraphs.** A paragraph holds three sentences at most. Put a blank line between ideas. If the sentences are parallel facts, make them a list.
 34. **Let the viewer wrap.** In replies, do not hard-wrap prose at a fixed column, since the terminal, web UI, or PR view wraps it to its own width. In files, follow the repo's formatter.
+35. **Cite what the reader already loads.** Do not restate repo instructions the agent reads on its own, such as `AGENTS.md`, standard checks, or test policy. Name the document and add only what is specific to this task.
 
 ## Check
 
