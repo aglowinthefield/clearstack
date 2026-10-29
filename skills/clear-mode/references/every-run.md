@@ -10,7 +10,7 @@ Treat copied card descriptions and handoff summaries as context, not replacement
 
 ## Steps
 
-1. **Open the run record.** From this skill's directory, run `scripts/record start --task "<the task in one line>" --playbook <name or none>` and keep the printed run id. Done when you hold an id.
+1. **Open the run record.** From this skill's directory, run `scripts/record start --task "<the task in one line>" --playbook <name or none>` and keep the printed run id. Done when you hold an id. If it prints `off`, the operator has set `CLEARSTACK_RECORD=off`: skip every other `scripts/record` call and the `Clear-Run` trailer for the rest of the run.
 2. **Pick principles and playbooks.** Read the index in `SKILL.md` and open each principle file, and any playbook that applies, before you act on it. Done when every principle and playbook you rely on has been read this session.
 3. **Work to done autonomously.** See `references/autonomy.md`. Add `--trailer "Clear-Run: <id>"` to every commit the run makes. Log each non-obvious decision with `scripts/record note <id> "<decision, alternatives, why>"`. When the operator's request or the open question changes, a follow-up redirects the work, you finish one sub-goal and move to the next, or you are blocked on a specific decision, call `scripts/record focus <id> "<the current request or question, one line>"` so a long run's goal stays visible instead of buried under the output since it was last stated.
 4. **Resume after compaction if needed.** If the harness compacts context and the session continues with a handoff, run `scripts/record resume <id>` first. Treat every claim it lists as verified as already proven. Do not re-run the evidence commands behind them. Re-verify only the claims it lists as unverified.
