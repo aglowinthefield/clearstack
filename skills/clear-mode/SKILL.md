@@ -22,7 +22,7 @@ The repo's `AGENTS.md` or `CLAUDE.md` and the operator's instructions win wherev
 
 See [`references/every-run.md`](references/every-run.md) for the full steps. In brief:
 
-1. **Open the run record.** Run `scripts/record start`. Done when you hold an id.
+1. **Open the run record.** Run `scripts/record start`. Done when you hold an id. If it prints `off`, skip steps 4 and 5 and the commit trailer.
 2. **Pick principles and playbooks.** Open each file you rely on before you act on it. Done when every one has been read this session.
 3. **Work to done autonomously.** See [`references/autonomy.md`](references/autonomy.md). Done when a stop condition holds.
 4. **Resume after compaction if needed.** Run `scripts/record resume <id>` after a compaction handoff. Treat verified claims as already proven.

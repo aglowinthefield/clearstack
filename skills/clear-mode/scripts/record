@@ -3,6 +3,9 @@
 
 The log is private to this machine. Commits link back to a run through a
 `Clear-Run: <id>` trailer, and clear-stats joins the two later.
+
+Set CLEARSTACK_RECORD=off to disable recording: `start` prints `off` and
+every command exits without writing.
 """
 
 import argparse
@@ -468,7 +471,16 @@ def confirm(args):
     })
 
 
+def recording_off():
+    return os.environ.get("CLEARSTACK_RECORD", "").strip().lower() in {"off", "0", "false", "no"}
+
+
 def main():
+    if recording_off():
+        if sys.argv[1:2] == ["start"]:
+            print("off")
+        return
+
     parser = argparse.ArgumentParser(prog="record", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(required=True)
 

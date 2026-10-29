@@ -32,6 +32,14 @@ class RecordTest(unittest.TestCase):
         path = Path(self.state.name) / "clearstack" / "runs.jsonl"
         return [json.loads(line) for line in path.read_text().splitlines()]
 
+    def test_record_off_writes_nothing_and_start_prints_off(self):
+        self.env["CLEARSTACK_RECORD"] = "off"
+        start = self.run_record("start", "--task", "x")
+        end = self.run_record("end", "cr-none", "--status", "done")
+
+        self.assertEqual((start.stdout.strip(), start.returncode, end.returncode), ("off", 0, 0))
+        self.assertFalse((Path(self.state.name) / "clearstack").exists())
+
     def test_a_run_writes_start_note_and_end_under_one_id(self):
         run_id = self.run_record("start", "--task", "fix scroll drift", "--playbook", "bug-fix").stdout.strip()
         self.run_record("note", run_id, "fixed in the hook, not the three callers")
