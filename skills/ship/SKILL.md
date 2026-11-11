@@ -47,7 +47,6 @@ When opening the PR, write the body from [`references/pr-body.md`](references/pr
 
 ## Harness notes
 
-- **Hermes:** run `watch` in the background with a line-match notification. React to each `dispatch_repair` with `delegate_task` or a kanban child card assigned to the repair profile. Fill `parent_run_id` with your current run-record id.
 - **Claude Code:** run `watch` in the background. React to each response line as it prints; use the Task tool for repair delegation.
 - **Codex:** run `watch` in the background. React to each response line; use a subagent invocation for repair delegation.
 - A harness with no delegation mechanism may fix `dispatch_repair` inline on the same branch, since the response already forbids opening another pull request.
