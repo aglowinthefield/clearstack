@@ -12,7 +12,7 @@ Agent runs accumulate waste: oversized tool results that refill the context wind
 Batch, never a per-turn hook. Three invocation modes:
 
 - **On demand:** load this skill and run `scripts/mine` against a window of history.
-- **On a cadence:** a scheduled kanban card or cron runs the same mining and files the report.
+- **On a cadence:** a cron job runs the same mining and files the report.
 - **It proposes, never applies.** Principles, guards, and scripts come out as report findings or draft cards. Nothing edits a skill or hook without a human or a fresh card.
 
 ## Use
