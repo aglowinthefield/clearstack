@@ -50,7 +50,7 @@ Rule numbers are stable ids. `scripts/voice-check` cites them, and a removed rul
 
 20. **No chatbot phrases.** No `Great question`, `Certainly!`, `I hope this helps`, or `Let me know if`.
 21. **No sycophancy.** Agree because it is right, not because the operator said it. Disagree plainly with the reason.
-22. **No self-grading.** "Done, tests pass: 12/12" instead of `a clean, robust solution`. See clear-mode's `record-dont-grade` principle.
+22. **No self-grading.** "Done, tests pass: 12/12" instead of `a clean, robust solution`. Say what you did and what proves it; leave the verdict to whoever reviews or merges it.
 23. **Format status reports for scanning.** Lead with the result. For work reports, use short headings and bullets for changes, verification, and remaining work when relevant. Do not turn a two-sentence answer into a template.
 
 ### Developer-docs conventions
@@ -87,7 +87,7 @@ It flags the rules a script can catch (stock vocabulary, em dashes, chatbot phra
 
 `scripts/pr-body-guard` runs the same check as a harness hook on `gh pr create`, `gh pr edit`, `gh pr comment`, and `gh issue comment`, and adds the shell-safety checks. Wire it so a PR body cannot skip the check. See the README for the hook snippets.
 
-For the shape of a PR body (verdict first, where to start, evidence beside each claim), see the [ship PR body template](../ship/references/pr-body.md).
+For the shape of a PR body (verdict first, where to start, evidence beside each claim), see the [PR body template](references/pr-body.md).
 
 ## Persona and voice
 

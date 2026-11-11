@@ -30,6 +30,23 @@ ClearStack is a folder of plain [Agent Skills](https://agentskills.io). It works
 npx skills add aglowinthefield/clearstack -g
 ```
 
+Each skill installs on its own. Pick the ones you want with `--skill`:
+
+```bash
+npx skills add aglowinthefield/clearstack -g --skill clear-voice
+```
+
+| Skill | What it does | Needs |
+|---|---|---|
+| `clear-voice` | Output style, `voice-check`, `pr-body-guard` | nothing |
+| `clear-mode` | Working mode, principles, run records | `clear-voice`, `ship` |
+| `ship` | Playbook from open PR to merge | `clear-voice`, `clear-ci` |
+| `clear-ci` | Fail-fast CI watcher | nothing |
+| `clear-stats` | Judge runs against repo evidence | nothing; reads `clear-mode` records if present |
+| `clear-reflect` | Mine transcripts for repeated waste | nothing |
+| `clear-memory` | Review saved agent memories | nothing |
+| `test-audit` | Audit tests for regression value | nothing |
+
 To have agents apply it without being asked, add this line to a repo's `AGENTS.md` or `CLAUDE.md`, or to your global one:
 
 ```markdown
@@ -223,11 +240,11 @@ It works with any provider that can export records with an id and text: mem0, fi
 
 ## Develop
 
-Link the skill from a checkout so edits take effect without reinstalling:
+Link the skills you use from a checkout so edits take effect without reinstalling:
 
 ```bash
 git clone https://github.com/aglowinthefield/clearstack ~/code/clearstack
-ln -s ~/code/clearstack/skills/clear-mode ~/.agents/skills/clear-mode
+ln -s ~/code/clearstack/skills/clear-voice ~/.agents/skills/clear-voice
 python3 -m unittest discover -s tests
 ```
 
