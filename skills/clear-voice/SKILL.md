@@ -85,7 +85,7 @@ scripts/voice-check FILE        # or pipe text on stdin
 
 It flags the rules a script can catch (stock vocabulary, em dashes, chatbot phrases, filler, paragraphs over three sentences) with line numbers and exits 1 on any hit. It cannot judge rules 1 to 4 or 7, so reread for those.
 
-`scripts/pr-body-guard` runs the same check as a harness hook on `gh pr create`, `gh pr edit`, `gh pr comment`, and `gh issue comment`, and adds the shell-safety checks. Wire it so a PR body cannot skip the check. See the README for the hook snippets.
+`scripts/pr-body-guard` runs the same check as a harness hook on `gh pr create`, `gh pr edit`, `gh pr comment`, and `gh issue comment`, and adds the shell-safety checks. Wire it so a PR body cannot skip the check. It expects the harness to run it before each of those commands and to treat exit code 1 as a block.
 
 For the shape of a PR body (verdict first, where to start, evidence beside each claim), see the [PR body template](references/pr-body.md).
 

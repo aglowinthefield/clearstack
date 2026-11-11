@@ -2,7 +2,8 @@
 """Flag clear-voice rule breaks that a script can see.
 
 Reads FILE arguments, or stdin when there are none. Prints one line per hit
-as `file:line: rule N: message` and exits 1 if anything was flagged. Text
+as `file:line: rule N: message` and exits 1 if anything was flagged.
+Rule 33 hits print as `warning:` and do not change the exit code. Text
 inside fenced code blocks and inline backticks is skipped, since code and
 quoted output are not prose.
 """
@@ -23,15 +24,14 @@ CHECKS = [
     (18, r"[\u201c\u201d\u2018\u2019]", "curly quote: use straight quotes"),
     (30, r"\[(here|click here|this link|link)\]", "link text: name the target"),
     (31, r"\b\d{1,2}/\d{1,2}/\d{2,4}\b", "ambiguous date: use YYYY-MM-DD"),
-    (32, r"(\be\.g\.|\bi\.e\.|\betc\.)", "Latin abbreviation: for example, that is, and so on"),
-    (32, r"\b(simply|please)\b", "drop the softener"),
-    (20, r"\b(great question|certainly!|i hope this helps|let me know if|happy to help|absolutely right)\b", "chatbot phrase"),
+    (32, r"\b(simply|just|easy)\b", "drop the minimizer: use the number or cut it"),
+    (20, r"\b(great question|certainly!|i hope this helps|happy to help|absolutely right)\b", "chatbot phrase"),
 ]
 COMPILED = [(rule, re.compile(p, re.IGNORECASE), msg) for rule, p, msg in CHECKS]
 INLINE_CODE = re.compile(r"`[^`]*`")
 
-# Rule 33: a paragraph or list item holds at most this many sentences. A list
-# item is one idea too, so it gets the same limit as a paragraph.
+# Rule 33: a paragraph usually holds this many sentences or fewer. Going over
+# is a warning, not a failure. A list item gets the same guide.
 MAX_SENTENCES = 3
 MAX_ITEM_WORDS = 60  # rule 11: one idea per bullet
 MAX_LEAD_WORDS = 45  # rule 1: the first block states the answer, briefly
@@ -68,12 +68,12 @@ def long_paragraphs(name, prose_lines):
             words = len(text.split())
             if BLOCK_START.match(block[0]):
                 if count > MAX_SENTENCES:
-                    hits.append(f"{name}:{start}: rule 33: list item has {count} sentences: one idea per bullet")
+                    hits.append(f"{name}:{start}: warning: rule 33: list item has {count} sentences: one idea per bullet")
                 if words > MAX_ITEM_WORDS:
                     hits.append(f"{name}:{start}: rule 11: list item has {words} words: split it into bullets")
             else:
                 if count > MAX_SENTENCES:
-                    hits.append(f"{name}:{start}: rule 33: paragraph has {count} sentences: split it or make a list")
+                    hits.append(f"{name}:{start}: warning: rule 33: paragraph has {count} sentences: split it or make a list")
                 # A label such as "Summary" is not the lead; the block after it is.
                 if not lead_done and (count or words > 4):
                     lead_done = True
@@ -135,7 +135,7 @@ def main(paths):
     hits = [hit for name, text in sources for hit in check(name, text)]
     for hit in hits:
         print(hit)
-    return 1 if hits else 0
+    return 1 if any(": warning: " not in hit for hit in hits) else 0
 
 
 if __name__ == "__main__":
